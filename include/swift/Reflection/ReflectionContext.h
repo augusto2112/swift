@@ -676,6 +676,14 @@ public:
     getBuilder().addReflectionInfo(I);
   }
 
+  void saveBuffer(MemoryReader::ReadBytesResult buffer) {
+    this->savedBuffers.push_back(std::move(buffer));
+  }
+
+  void saveImageRange(RemoteAddress start, RemoteAddress end) {
+    this->imageRanges.push_back(std::make_tuple(start, end));
+  }
+
   bool ownsObject(RemoteAddress ObjectAddress) {
     auto MetadataAddress = readMetadataFromInstance(ObjectAddress.getAddressData());
     if (!MetadataAddress)
