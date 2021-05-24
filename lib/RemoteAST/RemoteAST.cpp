@@ -32,6 +32,7 @@
 #include "swift/ClangImporter/ClangImporter.h"
 #include "swift/Demangling/Demangler.h"
 #include "llvm/ADT/StringSwitch.h"
+#include "llvm/Support/raw_ostream.h"
 
 // TODO: Develop a proper interface for this.
 #include "swift/AST/IRGenOptions.h"
@@ -530,6 +531,7 @@ public:
     auto payloadAddress = result->PayloadAddress;
     if (!result->IsBridgedError &&
         typeResult->getClassOrBoundGenericClass()) {
+      llvm::errs() << "Bridgederror\n";
       auto pointerval = Reader.readResolvedPointerValue(
           payloadAddress.getAddressData());
       if (!pointerval)
@@ -709,7 +711,7 @@ Result<OpenedExistential>
 RemoteASTContext::getDynamicTypeAndAddressForExistential(
     remote::RemoteAddress address, Type staticType) {
   return asImpl(Impl)->getDynamicTypeAndAddressForExistential(address,
-                                                              staticType);
+                                                              staticType);;;
 }
 
 Result<Type>

@@ -23,6 +23,7 @@
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/COFF.h"
 #include "llvm/Support/Memory.h"
+#include "llvm/Support/raw_ostream.h"
 
 #include "swift/ABI/Enum.h"
 #include "swift/ABI/ObjectFile.h"
@@ -92,7 +93,7 @@ class ReflectionContext
   using super = remote::MetadataReader<Runtime, TypeRefBuilder>;
   using super::readMetadata;
   using super::readObjCClassName;
-
+  using super::readResolvedPointerValue;
   std::unordered_map<typename super::StoredPointer, const TypeInfo *> Cache;
 
   /// All buffers we need to keep around long term. This will automatically free them
@@ -789,6 +790,58 @@ public:
     }
   }
 
+
+  llvm::Optional<std::pair<const TypeRef *, RemoteAddress>>
+  getDynamicTypeAndAddressClassExistential(RemoteAddress object) {
+    auto pointerval = readResolvedPointerValue(object.getAddressData());
+    if (!pointerval)
+      return llvm::None;
+    auto result = readMetadataFromInstance(*pointerval);
+    if (!result)
+      return llvm::None;
+    auto typeResult = readTypeFromMetadata(result.getValue());
+    if (!typeResult)
+      return llvm::None;
+    auto aa = RemoteAddress(*pointerval);
+  return std::make_pair(std::move(typeResult), aa);
+  }
+  
+  llvm::Optional<std::pair<const TypeRef *, RemoteAddress>>
+  getDynamicTypeAndAddressErrorExistential(RemoteAddress object,
+                                           bool dereference = true) {
+    //llvm::errs() << "Here?\n";;
+    if (dereference) {
+      auto pointerval =
+          readResolvedPointerValue(object.getAddressData());
+      if (!pointerval)
+        return llvm::None;
+      object = RemoteAddress(*pointerval);
+    }
+    auto result = readMetadataAndValueErrorExistential(object);
+    //llvm::errs() << "Here!\n";
+    if (!result)
+      return llvm::None;
+
+    auto typeResult =
+        readTypeFromMetadata(result->MetadataAddress.getAddressData());
+    if (!typeResult)
+      return llvm::None;
+    typeResult->dump();
+    // When the existential wraps a class type, LLDB expects that the
+    // address returned is the class instance itself and not the address
+    // of the reference.
+    auto payloadAddress = result->PayloadAddress;
+    // if (!result->IsBridgedError && typeResult->getClassOrBoundGenericClass()) {
+    //   auto pointerval =
+    //       readResolvedPointerValue(payloadAddress.getAddressData());
+    //   if (!pointerval)
+    //     return llvm::None;
+
+    //   payloadAddress = RemoteAddress(*pointerval);
+    // }
+
+    return std::make_pair(std::move(typeResult), std::move(payloadAddress));
+  }
   bool projectExistential(RemoteAddress ExistentialAddress,
                           const TypeRef *ExistentialTR,
                           const TypeRef **OutInstanceTR,
@@ -798,22 +851,27 @@ public:
       return false;
 
     auto ExistentialTI = getTypeInfo(ExistentialTR, ExternalTypeInfo);
-    if (ExistentialTI == nullptr)
+    if (ExistentialTI == nullptr) {
+    //  llvm::errs() << "Could not getTypeInfo\n";
       return false;
+    }
 
     auto ExistentialRecordTI = dyn_cast<const RecordTypeInfo>(ExistentialTI);
-    if (ExistentialRecordTI == nullptr)
+    if (ExistentialRecordTI == nullptr) {
+     // llvm::errs() << "Could not cast to RecordTypeInfo\n";
       return false;
-
+    }
+    // llvm::errs() << "Record kind: " << (int) ExistentialRecordTI->getRecordKind() << "\n";
     switch (ExistentialRecordTI->getRecordKind()) {
     // Class existentials have trivial layout.
-    // It is itself the pointer to the instance followed by the witness tables.
-    case RecordKind::ClassExistential:
+    // addressIt is itself the pointer to the instance followed by the witness tables.
+    case RecordKind::ClassExistential: {
+
       // This is just AnyObject.
       *OutInstanceTR = ExistentialRecordTI->getFields()[0].TR;
       *OutInstanceAddress = ExistentialAddress;
       return true;
-
+                                       };
     case RecordKind::OpaqueExistential: {
       auto OptMetaAndValue =
           readMetadataAndValueOpaqueExistential(ExistentialAddress);
@@ -830,6 +888,12 @@ public:
       return true;
     }
     case RecordKind::ErrorExistential: {
+      auto a = getDynamicTypeAndAddressErrorExistential(ExistentialAddress);
+      if (!a)
+        return false;
+      *OutInstanceTR = a->first;
+      *OutInstanceAddress = a->second;
+      return true;
       auto OptMetaAndValue =
           readMetadataAndValueErrorExistential(ExistentialAddress);
       if (!OptMetaAndValue)
@@ -1438,6 +1502,83 @@ private:
     }
 
     return llvm::None;
+  }
+public:
+  llvm::Optional<std::pair<const TypeRef *, RemoteAddress>>
+  getDynamicTypeAndAddressExistentialMetatype(RemoteAddress object) {
+    // The value of the address is just the input address.
+    // The type is obtained through the following sequence of steps:
+    // 1) Loading a pointer from the input address
+    // 2) Reading it as metadata and resolving the type
+    // 3) Wrapping the resolved type in an existential metatype.
+    auto pointerval = readResolvedPointerValue(object.getAddressData());
+    if (!pointerval)
+      return llvm::None;
+    auto typeResult = readTypeFromMetadata(*pointerval);
+    if (!typeResult)
+      return llvm::None;
+    return std::make_pair(std::move(typeResult), std::move(object));
+  }
+
+  llvm::Optional<std::pair<const TypeRef *, RemoteAddress>>
+  getDynamicTypeAndAddressOpaqueExistential(RemoteAddress object) {
+    auto result = readMetadataAndValueOpaqueExistential(object);
+    if (!result)
+      return llvm::None;
+
+    auto typeResult =
+        readTypeFromMetadata(result->MetadataAddress.getAddressData());
+    if (!typeResult)
+      return llvm::None;
+
+    // When the existential wraps a class type, LLDB expects that the
+    // address returned is the class instance itself and not the address
+    // of the reference.
+    auto payloadAddress = result->PayloadAddress;
+    bool isClass = typeResult->getKind() == TypeRefKind::ForeignClass ||
+                   typeResult->getKind() == TypeRefKind::ObjCClass;
+    if (auto *nominal = llvm::dyn_cast<NominalTypeRef>(typeResult))
+      isClass = nominal->isClass();
+    else if (auto *boundGeneric =
+                 llvm::dyn_cast<BoundGenericTypeRef>(typeResult))
+      isClass = boundGeneric->isClass();
+
+    if (isClass) {
+      auto pointerval =
+          readResolvedPointerValue(payloadAddress.getAddressData());
+      if (!pointerval)
+        return llvm::None;
+
+      payloadAddress = RemoteAddress(*pointerval);
+    }
+
+    return std::make_pair(std::move(typeResult), std::move(payloadAddress));
+  }
+  llvm::Optional<std::pair<const TypeRef *, RemoteAddress>>
+  getDynamicTypeAndAddressForExistential(RemoteAddress object,
+                                         const TypeRef *ExistentialTR)  {
+
+    if (ExistentialTR == nullptr)
+      return llvm::None;
+
+    auto ExistentialTI = getTypeInfo(ExistentialTR, nullptr);
+    if (ExistentialTI == nullptr)
+      return llvm::None;
+
+    auto ExistentialRecordTI = dyn_cast<const RecordTypeInfo>(ExistentialTI);
+
+
+    switch (ExistentialRecordTI->getRecordKind()) {
+    // Class existentials have trivial layout.
+    // addressIt is itself the pointer to the instance followed by the witness tables.
+    case RecordKind::ClassExistential:
+      return getDynamicTypeAndAddressClassExistential(object);
+    case RecordKind::ErrorExistential:
+      return getDynamicTypeAndAddressErrorExistential(object);
+    case RecordKind::OpaqueExistential:
+      return getDynamicTypeAndAddressOpaqueExistential(object);
+    }
+    llvm_unreachable("invalid type kind");
   }
 };
 
