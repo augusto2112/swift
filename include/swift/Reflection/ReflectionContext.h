@@ -831,14 +831,22 @@ public:
     // address returned is the class instance itself and not the address
     // of the reference.
     auto payloadAddress = result->PayloadAddress;
-    // if (!result->IsBridgedError && typeResult->getClassOrBoundGenericClass()) {
-    //   auto pointerval =
-    //       readResolvedPointerValue(payloadAddress.getAddressData());
-    //   if (!pointerval)
-    //     return llvm::None;
+    bool isClass = typeResult->getKind() == TypeRefKind::ForeignClass ||
+                   typeResult->getKind() == TypeRefKind::ObjCClass;
+    if (auto *nominal = llvm::dyn_cast<NominalTypeRef>(typeResult))
+      isClass = nominal->isClass();
+    else if (auto *boundGeneric =
+                 llvm::dyn_cast<BoundGenericTypeRef>(typeResult))
+      isClass = boundGeneric->isClass();
 
-    //   payloadAddress = RemoteAddress(*pointerval);
-    // }
+    if (!result->IsBridgedError && isClass) {
+       auto pointerval =
+           readResolvedPointerValue(payloadAddress.getAddressData());
+       if (!pointerval)
+         return llvm::None;
+
+       payloadAddress = RemoteAddress(*pointerval);
+    }
 
     return std::make_pair(std::move(typeResult), std::move(payloadAddress));
   }
