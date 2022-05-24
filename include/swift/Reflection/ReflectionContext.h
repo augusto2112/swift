@@ -1152,6 +1152,27 @@ public:
     return EnumTI->projectEnumValue(getReader(), EnumAddress, CaseIndex);
   }
 
+  llvm::Optional<std::pair<const TypeRef *, RemoteAddress>>
+  projectEnumValue(RemoteAddress EnumAddress, const TypeRef *EnumTR) {
+    int CaseIndex;
+    if (!projectEnumValue(EnumAddress, EnumTR, &CaseIndex, nullptr)) {
+      return {};
+    }
+
+    auto TI = getTypeInfo(EnumTR, nullptr);
+    if (TI == nullptr) {
+      return {};
+    }
+    const FieldInfo *FieldInfo = nullptr;
+    if (auto *EnumTI = dyn_cast<EnumTypeInfo>(TI)) {
+      FieldInfo = &(EnumTI->getCases()[CaseIndex]);
+    } else {
+      assert(false && "convertChild(TI): TI must be record or enum typeinfo");
+      return {};
+    }
+    return {{FieldInfo->TR, EnumAddress + FieldInfo->Offset}};
+  }
+
   /// Return a description of the layout of a value with the given type.
   const TypeInfo *getTypeInfo(const TypeRef *TR,
                               remote::TypeInfoProvider *ExternalTypeInfo) {
