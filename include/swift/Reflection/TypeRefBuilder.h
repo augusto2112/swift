@@ -936,12 +936,12 @@ private:
   /// Indexes of Reflection Infos we've already processed.
   llvm::DenseSet<size_t> ProcessedReflectionInfoIndexes;
 
-  llvm::Optional<std::string> normalizeReflectionName(RemoteRef<char> name);
+  llvm::Optional<std::string> normalizeReflectionName(RemoteRef<char> reflectionName, llvm::Optional<NodePointer> target = llvm::None);
   bool reflectionNameMatches(RemoteRef<char> reflectionName,
                              StringRef searchName);
-  void populateFieldTypeInfoCacheWithReflectionAtIndex(size_t Index);
+  void populateFieldTypeInfoCacheWithReflectionAtIndex(size_t Index, llvm::Optional<NodePointer> Target = llvm::None);
   llvm::Optional<RemoteRef<FieldDescriptor>>
-  findFieldDescriptorAtIndex(size_t Index, const std::string &MangledName);
+  findFieldDescriptorAtIndex(size_t Index, const std::string &MangledName, llvm::Optional<NodePointer> Target = llvm::None);
 
 public:
   RemoteRef<char> readTypeRef(uint64_t remoteAddr);
@@ -959,7 +959,7 @@ public:
   }
   
 private:
-  using RefDemangler = std::function<Demangle::Node * (RemoteRef<char>, bool)>;
+  using RefDemangler = std::function<Demangle::Node * (RemoteRef<char>, bool, llvm::Optional<NodePointer>)>;
   using UnderlyingTypeReader = std::function<const TypeRef* (uint64_t, unsigned)>;
   using ByteReader = std::function<remote::MemoryReader::ReadBytesResult (remote::RemoteAddress, unsigned)>;
   using StringReader = std::function<bool (remote::RemoteAddress, std::string &)>;
@@ -987,10 +987,10 @@ public:
     : TC(*this),
       PointerSize(sizeof(typename Runtime::StoredPointer)),
       TypeRefDemangler(
-      [this, &reader](RemoteRef<char> string, bool useOpaqueTypeSymbolicReferences) -> Demangle::Node * {
+      [this, &reader](RemoteRef<char> string, bool useOpaqueTypeSymbolicReferences, llvm::Optional<NodePointer> target) -> Demangle::Node * {
         return reader.demangle(string,
                                remote::MangledNameKind::Type,
-                               Dem, useOpaqueTypeSymbolicReferences);
+                               Dem, useOpaqueTypeSymbolicReferences, target);
       }),
       OpaqueUnderlyingTypeReader(
       [&reader](uint64_t descriptorAddr, unsigned ordinal) -> const TypeRef* {
@@ -1041,8 +1041,8 @@ public:
   { }
 
   Demangle::Node *demangleTypeRef(RemoteRef<char> string,
-                                  bool useOpaqueTypeSymbolicReferences = true) {
-    return TypeRefDemangler(string, useOpaqueTypeSymbolicReferences);
+                                  bool useOpaqueTypeSymbolicReferences = true, llvm::Optional<NodePointer> target = llvm::None) {
+    return TypeRefDemangler(string, useOpaqueTypeSymbolicReferences, target);
   }
 
   TypeConverter &getTypeConverter() { return TC; }

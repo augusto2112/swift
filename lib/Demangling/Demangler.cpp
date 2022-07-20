@@ -561,7 +561,7 @@ Demangler::DemangleInitRAII::~DemangleInitRAII() {
 }
 
 NodePointer Demangler::demangleSymbol(StringRef MangledName,
-        std::function<SymbolicReferenceResolver_t> SymbolicReferenceResolver) {
+        std::function<SymbolicReferenceResolver_t> SymbolicReferenceResolver, llvm::Optional<NodePointer> Target) {
   DemangleInitRAII state(*this, MangledName,
                          std::move(SymbolicReferenceResolver));
 
@@ -581,7 +581,7 @@ NodePointer Demangler::demangleSymbol(StringRef MangledName,
 
   // If any other prefixes are accepted, please update Mangler::verify.
 
-  if (!parseAndPushNodes())
+  if (!parseAndPushNodes(Target))
     return nullptr;
 
   NodePointer topLevel = createNode(Node::Kind::Global);
@@ -610,11 +610,13 @@ NodePointer Demangler::demangleSymbol(StringRef MangledName,
 }
 
 NodePointer Demangler::demangleType(StringRef MangledName,
-        std::function<SymbolicReferenceResolver_t> SymbolicReferenceResolver) {
+        std::function<SymbolicReferenceResolver_t> SymbolicReferenceResolver,
+        llvm::Optional<NodePointer> target) {
   DemangleInitRAII state(*this, MangledName,
                          std::move(SymbolicReferenceResolver));
 
-  parseAndPushNodes();
+  if (!parseAndPushNodes())
+    return nullptr;
 
   if (NodePointer Result = popNode())
     return Result;
@@ -622,11 +624,41 @@ NodePointer Demangler::demangleType(StringRef MangledName,
   return createNode(Node::Kind::Suffix, Text);
 }
 
-bool Demangler::parseAndPushNodes() {
+static bool checkIfSame(NodePointer n1, NodePointer n2) {
+  if ((!n1 && n2) || (!n2 && n1))
+    return false;
+  if (n1->getKind() != n2->getKind())
+    return false;
+  if (n1->getNumChildren() != n2->getNumChildren())
+    return false;
+  if (n1->hasText() != n2->hasText())
+    return false;
+  if (n1->getText() != n2->getText())
+    return false;
+    
+  for (size_t i = 0; i < n1->getNumChildren(); ++i) 
+    if (checkIfSame(n1->getChild(i), n2->getChild(i)))
+      return true;
+  return false;
+}
+
+static bool checkIfSubstree(NodePointer outer, NodePointer inner) {
+  if (!outer)
+    return false;
+  if (checkIfSame(outer, inner))
+    return true;
+  for (auto child : *outer)
+    if (checkIfSubstree(child, inner))
+      return true;
+  return false;
+}
+bool Demangler::parseAndPushNodes(llvm::Optional<NodePointer> target) {
   const auto textSize = Text.size();
   while (Pos < textSize) {
     NodePointer Node = demangleOperator();
     if (!Node)
+      return false;
+    if (target && !checkIfSubstree(*target, Node))
       return false;
     pushNode(Node);
   }

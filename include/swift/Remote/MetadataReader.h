@@ -412,7 +412,8 @@ public:
   Demangle::NodePointer demangle(RemoteRef<char> mangledName,
                                  MangledNameKind kind,
                                  Demangler &dem,
-                                 bool useOpaqueTypeSymbolicReferences = false) {
+                                 bool useOpaqueTypeSymbolicReferences = false,
+                                 llvm::Optional<NodePointer> target = llvm::None) {
     // Symbolic reference resolver for the demangle operation below.
     auto symbolicReferenceResolver = [&](SymbolicReferenceKind kind,
                                          Directness directness,

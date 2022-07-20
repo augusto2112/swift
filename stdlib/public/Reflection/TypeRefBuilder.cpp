@@ -92,7 +92,7 @@ valid_type_ref:
 
 /// Load and normalize a mangled name so it can be matched with string equality.
 llvm::Optional<std::string>
-TypeRefBuilder::normalizeReflectionName(RemoteRef<char> reflectionName) {
+TypeRefBuilder::normalizeReflectionName(RemoteRef<char> reflectionName, llvm::Optional<NodePointer> target) {
   // Remangle the reflection name to resolve symbolic references.
   if (auto node = demangleTypeRef(reflectionName,
                                   /*useOpaqueTypeSymbolicReferences*/ false)) {
@@ -217,16 +217,14 @@ static llvm::Optional<StringRef> FindOutermostModuleName(NodePointer Node) {
 }
 
 void TypeRefBuilder::populateFieldTypeInfoCacheWithReflectionAtIndex(
-    size_t Index) {
-  if (ProcessedReflectionInfoIndexes.contains(Index))
-    return;
+    size_t Index, llvm::Optional<NodePointer> Target) {
 
   const auto &Info = ReflectionInfos[Index];
   for (auto FD : Info.Field) {
     if (!FD->hasMangledTypeName())
       continue;
     auto CandidateMangledName = readTypeRef(FD, FD->MangledTypeName);
-    if (auto NormalizedName = normalizeReflectionName(CandidateMangledName)) {
+    if (auto NormalizedName = normalizeReflectionName(CandidateMangledName, Target)) {
       FieldTypeInfoCache[std::move(*NormalizedName)] = FD;
     }
   }
@@ -236,8 +234,8 @@ void TypeRefBuilder::populateFieldTypeInfoCacheWithReflectionAtIndex(
 
 llvm::Optional<RemoteRef<FieldDescriptor>>
 TypeRefBuilder::findFieldDescriptorAtIndex(size_t Index,
-                                           const std::string &MangledName) {
-  populateFieldTypeInfoCacheWithReflectionAtIndex(Index);
+                                           const std::string &MangledName, llvm::Optional<NodePointer> Target) {
+  populateFieldTypeInfoCacheWithReflectionAtIndex(Index, Target);
   auto Found = FieldTypeInfoCache.find(MangledName);
   if (Found != FieldTypeInfoCache.end()) {
     return Found->second;
@@ -272,7 +270,7 @@ RemoteRef<FieldDescriptor> TypeRefBuilder::getFieldTypeInfo(const TypeRef *TR) {
     for (size_t i = 0; i < ReflectionInfos.size(); ++i)
       if (llvm::is_contained(ReflectionInfos[i].PotentialModuleNames,
                              ModuleName))
-        if (auto FD = findFieldDescriptorAtIndex(i, *MangledName))
+        if (auto FD = findFieldDescriptorAtIndex(i, *MangledName,Node))
           return *FD;
 
   // On failure, fill out the cache, ReflectionInfo by ReflectionInfo,

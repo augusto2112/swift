@@ -14,9 +14,6 @@ def __lldb_init_module(debugger, internal_dict):
     tName = 'lldbSwiftDataFormatters.SmallBitVectorSummaryProvider'
     debugger.HandleCommand('type summary add -w llvm '
                            '-F %s -x "^llvm::SmallBitVector$"' % tName)
-    debugger.HandleCommand('type summary add --skip-references -w swift '
-                           '-F lldbSwiftDataFormatters.DemangleNodeSummaryProvider '
-                           '-x "^swift::Demangle::Node$"')
     debugger.HandleCommand('type synthetic add --skip-references -w swift '
                            '-l lldbSwiftDataFormatters.DemangleNodeSynthProvider '
                            '-x "^swift::Demangle::Node$"')
@@ -106,19 +103,31 @@ class DemangleNodeSynthProvider:
         index -= 1
 
         if self.payload_kind is DemangleNodePayloadKind.TEXT and index == 0:
-            return self.payload.GetChildMemberWithName('Text')
+            a = self.payload.GetChildMemberWithName('Text')
+            if a.TypeIsPointerType():
+                return a.Dereference()
+            return a
         if self.payload_kind is DemangleNodePayloadKind.INDEX and index == 0:
-            return self.payload.GetChildMemberWithName('Index')
+            a = self.payload.GetChildMemberWithName('Index')
+            if a.TypeIsPointerType():
+                return a.Dereference()
+            return a
         if self.payload_kind is DemangleNodePayloadKind.ONE_CHILD \
                 and index == 0:
-            return self.payload \
+            a = self.payload \
                 .GetChildMemberWithName('InlineChildren') \
                 .GetChildAtIndex(0)
+            if a.TypeIsPointerType():
+                return a.Dereference()
+            return a
         if self.payload_kind is DemangleNodePayloadKind.TWO_CHILDREN \
                 and 0 <= index <= 1:
-            return self.payload \
+            a = self.payload \
                 .GetChildMemberWithName('InlineChildren') \
                 .GetChildAtIndex(index)
+            if a.TypeIsPointerType():
+                return a.Dereference()
+            return a
         if self.payload_kind is DemangleNodePayloadKind.MANY_CHILDREN \
                 and index >= 0:
             node_vector = self.payload.GetChildMemberWithName('Children')
@@ -127,8 +136,11 @@ class DemangleNodeSynthProvider:
                 return None
             nodes_ptr = node_vector.GetChildMemberWithName('Nodes')
             offset = self.node_ptr_size * index
-            return nodes_ptr.CreateChildAtOffset('[' + str(index) + ']',
+            a = nodes_ptr.CreateChildAtOffset('[' + str(index) + ']',
                                                  offset, self.node_ptr_type)
+            if a.TypeIsPointerType():
+                return a.Dereference()
+            return a
         return None
 
     def update(self):
@@ -142,36 +154,5 @@ class DemangleNodeSynthProvider:
             self.node_ptr_type = valobj_type.GetPointerType()
         self.node_ptr_size = self.node_ptr_type.GetByteSize()
         self.payload = self.valobj.GetChildAtIndex(0)
+        return False
 
-
-def DemangleNodeSummaryProvider(valobj, internal_dict):
-    valobj = valobj.GetNonSyntheticValue()
-    result = valobj.GetChildMemberWithName('NodeKind').GetValue()
-    result += ', '
-    payload_kind = DemangleNodePayloadKind(
-        valobj.GetChildMemberWithName('NodePayloadKind').GetValueAsUnsigned()
-    )
-    if payload_kind is DemangleNodePayloadKind.NONE:
-        result += '0 children'
-    if payload_kind is DemangleNodePayloadKind.TEXT:
-        result += 'Text='
-        result += valobj \
-            .GetChildAtIndex(0) \
-            .GetChildMemberWithName('Text') \
-            .GetSummary()
-    if payload_kind is DemangleNodePayloadKind.INDEX:
-        result += 'Index='
-        index = valobj \
-            .GetChildAtIndex(0) \
-            .GetChildMemberWithName('Index') \
-            .GetValueAsUnsigned()
-        result += str(index)
-    if payload_kind is DemangleNodePayloadKind.ONE_CHILD:
-        result += '1 child'
-    if payload_kind in [DemangleNodePayloadKind.TWO_CHILDREN,
-                        DemangleNodePayloadKind.MANY_CHILDREN]:
-        num_children = \
-            DemangleNodeSynthProvider(valobj, internal_dict).num_children() - 1
-        result += str(num_children)
-        result += ' children'
-    return result

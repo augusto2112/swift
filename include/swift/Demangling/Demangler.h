@@ -483,7 +483,7 @@ protected:
     return createWithChild(kind, popNode(Node::Kind::Type));
   }
 
-  bool parseAndPushNodes();
+  bool parseAndPushNodes(llvm::Optional<NodePointer> target = llvm::None);
 
   NodePointer changeKind(NodePointer Node, Node::Kind NewKind);
 
@@ -613,9 +613,11 @@ public:
   /// on failure.
   /// The lifetime of the returned node tree ends with the lifetime of the
   /// Demangler or with a call of clear().
-  NodePointer demangleSymbol(StringRef MangledName,
-            std::function<SymbolicReferenceResolver_t> SymbolicReferenceResolver
-               = nullptr);
+  NodePointer demangleSymbol(
+      StringRef MangledName,
+      std::function<SymbolicReferenceResolver_t> SymbolicReferenceResolver =
+          nullptr,
+      llvm::Optional<NodePointer> target = llvm::None);
 
   /// Demangle the given type and return the parse tree.
   ///
@@ -629,8 +631,9 @@ public:
   /// The lifetime of the returned node tree ends with the lifetime of the
   /// Demangler or with a call of clear().
   NodePointer demangleType(StringRef MangledName,
-            std::function<SymbolicReferenceResolver_t> SymbolicReferenceResolver
-              = nullptr);
+                           std::function<SymbolicReferenceResolver_t>
+                               SymbolicReferenceResolver = nullptr,
+                           llvm::Optional<NodePointer> target = llvm::None);
 };
 
 /// A demangler which uses stack space for its initial memory.
