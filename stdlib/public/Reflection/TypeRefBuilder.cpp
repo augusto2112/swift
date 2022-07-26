@@ -257,25 +257,35 @@ TypeRefBuilder::binarySearch(FieldSection &Field, const std::vector<int64_t> &of
   if (start > end)
     return {};
 
+  static std::unordered_map<uint64_t, std::string> hashed;
   auto mid = (start + end) / 2;
   uint64_t midOffset = offsets.at(mid);
-  auto FD = Field.getRemoteRef<FieldDescriptor>(
-      Field.startAddress().getAddressData() + midOffset);
-  auto CandidateMangledName = readTypeRef(FD, FD->MangledTypeName);
-  if (auto NormalizedName = normalizeReflectionName(CandidateMangledName)) {
-      FieldTypeInfoCache[*NormalizedName] = FD;
+  auto addr = Field.startAddress().getAddressData() + midOffset;
+  auto FD = Field.getRemoteRef<FieldDescriptor>(addr);
+  auto iter = hashed.find(addr);
+  llvm::Optional<std::string> NormalizedName;
+  if (iter != hashed.end()) {
+    NormalizedName = iter->second;
+  } else {
+    auto CandidateMangledName = readTypeRef(FD, FD->MangledTypeName);
+    NormalizedName = normalizeReflectionName(CandidateMangledName);
+    FieldTypeInfoCache[*NormalizedName] = FD;
+    hashed[addr] = *NormalizedName;
+  }
+
+  if (NormalizedName) {
     if (*NormalizedName == mangledName)
       return FD;
-    else if (mangledName > *NormalizedName) 
+    else if (mangledName > *NormalizedName)
       return binarySearch(Field, offsets, mangledName, mid + 1, end);
-    else 
+    else
       return binarySearch(Field, offsets, mangledName, start, mid - 1);
   }
   return {};
 }
 
 RemoteRef<FieldDescriptor> TypeRefBuilder::getFieldTypeInfo(const TypeRef *TR) {
-  const std::string *MangledName;
+  const std::string *MangledName;;
   NodePointer Node;;
   Demangler Dem;
   if (auto N = dyn_cast<NominalTypeRef>(TR)) {
@@ -366,6 +376,7 @@ RemoteRef<FieldDescriptor> TypeRefBuilder::getFieldTypeInfo(const TypeRef *TR) {
     }
 
 
+  abort();
   // Heuristic: find the outermost Module node available, and try to parse the
   // ReflectionInfos with a matching name first.
   auto ModuleName = FindOutermostModuleName(Node);
