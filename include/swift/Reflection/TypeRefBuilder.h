@@ -1077,6 +1077,10 @@ public:
 
 private:
   llvm::Optional<uint64_t> multiPayloadEnumPointerMask;
+  RemoteRef<FieldDescriptor> binarySearch(FieldSection &Field,
+                                          const std::vector<int64_t> &offsets,
+                                          const std::string &mangledName,
+                                          int64_t start, int64_t end);
 
 public:
   /// Retrieve the MPE pointer mask from the target

@@ -27,6 +27,12 @@
 #include <iostream>
 #include <sstream>
 
+#include <fstream>
+#include <map>
+#include <unordered_set>
+#include <sys/stat.h>
+#include <functional>
+
 using namespace swift;
 using namespace reflection;
 using ReadBytesResult = swift::remote::MemoryReader::ReadBytesResult;
@@ -245,9 +251,32 @@ TypeRefBuilder::findFieldDescriptorAtIndex(size_t Index,
   return llvm::None;
 }
 
+RemoteRef<FieldDescriptor>
+TypeRefBuilder::binarySearch(FieldSection &Field, const std::vector<int64_t> &offsets,
+             const std::string &mangledName, int64_t start, int64_t end) {
+  if (start > end)
+    return {};
+
+  auto mid = (start + end) / 2;
+  uint64_t midOffset = offsets.at(mid);
+  auto FD = Field.getRemoteRef<FieldDescriptor>(
+      Field.startAddress().getAddressData() + midOffset);
+  auto CandidateMangledName = readTypeRef(FD, FD->MangledTypeName);
+  if (auto NormalizedName = normalizeReflectionName(CandidateMangledName)) {
+      FieldTypeInfoCache[*NormalizedName] = FD;
+    if (*NormalizedName == mangledName)
+      return FD;
+    else if (mangledName > *NormalizedName) 
+      return binarySearch(Field, offsets, mangledName, mid + 1, end);
+    else 
+      return binarySearch(Field, offsets, mangledName, start, mid - 1);
+  }
+  return {};
+}
+
 RemoteRef<FieldDescriptor> TypeRefBuilder::getFieldTypeInfo(const TypeRef *TR) {
   const std::string *MangledName;
-  NodePointer Node;
+  NodePointer Node;;
   Demangler Dem;
   if (auto N = dyn_cast<NominalTypeRef>(TR)) {
     Node = N->getDemangling(Dem);
@@ -263,12 +292,86 @@ RemoteRef<FieldDescriptor> TypeRefBuilder::getFieldTypeInfo(const TypeRef *TR) {
   if (Found != FieldTypeInfoCache.end())
     return Found->second;
 
+  auto first = ReflectionInfos.front();
+  auto n = first.PotentialModuleNames.back();
+
+  if (n.size() >= 240) 
+    n = n.drop_front(n.size() - 240);
+
+  std::string name = "/Users/augusto/tmp/offsets";
+  name += n.str();
+
+
+  struct stat buffer;
+  if ((stat(name.c_str(), &buffer) != 0)) {
+    std::ofstream myfile;
+    myfile.open(name, std::ios::in | std::ios::app);
+
+    for (auto &Info : ReflectionInfos) {
+      auto N = Info.PotentialModuleNames.begin();
+      myfile << N->str() << " ";
+      std::map<std::string, int64_t> offsets;
+      for (auto FD : Info.Field) {
+        if (!FD->hasMangledTypeName())
+          continue;
+        auto CandidateMangledName = readTypeRef(FD, FD->MangledTypeName);
+        if (auto NormalizedName =
+                normalizeReflectionName(CandidateMangledName)) {
+          offsets[std::move(*NormalizedName)] =
+              FD.getAddressData() - Info.Field.startAddress().getAddressData();
+        }
+      }
+      for (auto &offset : offsets) {
+        myfile << offset.second << " ";
+      }
+      myfile << "\n";
+    }
+    myfile.close();
+    abort();
+  }
+  static int b = 1;
+  static std::unordered_map<std::string,std::vector<int64_t>> offsets;
+  if (b) {
+    b = 0;
+    std::ifstream myfile;
+    myfile.open(name);
+
+    std::string str;
+    while (std::getline(myfile, str)) {
+      llvm::StringRef t(str);
+      llvm::SmallVector<StringRef> parts;
+      t.split(parts, " ");
+      std::vector<int64_t> curr_offsets;
+      auto name = parts[0].str();
+      for (size_t i = 1; i < parts.size(); ++i) {
+        auto a = parts[i];
+        if (a.empty())
+          continue;
+        int64_t t;
+        a.getAsInteger(10, t);
+        curr_offsets.push_back(t);
+      }
+      offsets.insert({name, curr_offsets});
+
+    }
+  }
+  
+  if (!offsets.empty())
+    for (size_t i = 0; i < ReflectionInfos.size(); ++i) {
+      auto name = ReflectionInfos[i].PotentialModuleNames[0].str();
+      auto curr_offsets = offsets[name];
+      if (auto FD = binarySearch(ReflectionInfos[i].Field, curr_offsets,
+                                 *MangledName, 0, curr_offsets.size() - 1))
+        return FD;
+    }
+
+
   // Heuristic: find the outermost Module node available, and try to parse the
   // ReflectionInfos with a matching name first.
   auto ModuleName = FindOutermostModuleName(Node);
   // If we couldn't find a module name or the type is imported (__C module) we
   // don't any useful information on which image to look for the type.
-  if (ModuleName && ModuleName != llvm::StringRef("__C"))
+  if (ModuleName && ModuleName != llvm::StringRef("__C") && false)
     for (size_t i = 0; i < ReflectionInfos.size(); ++i)
       if (llvm::is_contained(ReflectionInfos[i].PotentialModuleNames,
                              ModuleName))
