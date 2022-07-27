@@ -242,8 +242,19 @@ void TypeRefBuilder::populateFieldTypeInfoCacheWithReflectionAtIndex(
 
 llvm::Optional<RemoteRef<FieldDescriptor>>
 TypeRefBuilder::findFieldDescriptorAtIndex(size_t Index,
-                                           const std::string &MangledName) {
-  populateFieldTypeInfoCacheWithReflectionAtIndex(Index);
+                                           const std::string &MangledName,
+                                           std::unordered_map<std::string,std::vector<int64_t>> &offsets) {
+  if (offsets.empty())
+    populateFieldTypeInfoCacheWithReflectionAtIndex(Index);
+  else {
+    for (size_t i = 0; i < ReflectionInfos.size(); ++i) {
+      auto name = ReflectionInfos[i].PotentialModuleNames[0].str();
+      auto curr_offsets = offsets[name];
+      if (auto FD = binarySearch(ReflectionInfos[i].Field, curr_offsets,
+                                 MangledName, 0, curr_offsets.size() - 1))
+        return FD;
+    }
+  }
   auto Found = FieldTypeInfoCache.find(MangledName);
   if (Found != FieldTypeInfoCache.end()) {
     return Found->second;
@@ -365,7 +376,8 @@ RemoteRef<FieldDescriptor> TypeRefBuilder::getFieldTypeInfo(const TypeRef *TR) {
 
     }
   }
-  
+ 
+  /*
   if (!offsets.empty())
     for (size_t i = 0; i < ReflectionInfos.size(); ++i) {
       auto name = ReflectionInfos[i].PotentialModuleNames[0].str();
@@ -377,6 +389,7 @@ RemoteRef<FieldDescriptor> TypeRefBuilder::getFieldTypeInfo(const TypeRef *TR) {
 
 
   abort();
+  */
   // Heuristic: find the outermost Module node available, and try to parse the
   // ReflectionInfos with a matching name first.
   auto ModuleName = FindOutermostModuleName(Node);
@@ -386,13 +399,13 @@ RemoteRef<FieldDescriptor> TypeRefBuilder::getFieldTypeInfo(const TypeRef *TR) {
     for (size_t i = 0; i < ReflectionInfos.size(); ++i)
       if (llvm::is_contained(ReflectionInfos[i].PotentialModuleNames,
                              ModuleName))
-        if (auto FD = findFieldDescriptorAtIndex(i, *MangledName))
+        if (auto FD = findFieldDescriptorAtIndex(i, *MangledName, offsets))
           return *FD;
 
   // On failure, fill out the cache, ReflectionInfo by ReflectionInfo,
   // until we find the field descriptor we're looking for.
   for (size_t i = 0; i < ReflectionInfos.size(); ++i)
-    if (auto FD = findFieldDescriptorAtIndex(i, *MangledName))
+    if (auto FD = findFieldDescriptorAtIndex(i, *MangledName, offsets))
       return *FD;
 
   return nullptr;

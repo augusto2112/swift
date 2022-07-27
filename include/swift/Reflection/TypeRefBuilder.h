@@ -941,7 +941,7 @@ private:
                              StringRef searchName);
   void populateFieldTypeInfoCacheWithReflectionAtIndex(size_t Index);
   llvm::Optional<RemoteRef<FieldDescriptor>>
-  findFieldDescriptorAtIndex(size_t Index, const std::string &MangledName);
+  findFieldDescriptorAtIndex(size_t Index, const std::string &MangledName, std::unordered_map<std::string,std::vector<int64_t>> &offsets); 
 
 public:
   RemoteRef<char> readTypeRef(uint64_t remoteAddr);
