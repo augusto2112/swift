@@ -1365,7 +1365,7 @@ public:
         break;
 
       // If we didn't find the member type, check the superclass.
-      auto *Superclass = Builder.lookupSuperclass(SubstBase);
+      auto *Superclass = Builder.lookupSuperclass(SubstBase, nullptr);
       if (Superclass == nullptr)
         break;
 

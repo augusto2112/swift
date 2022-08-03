@@ -915,10 +915,13 @@ public:
   /// Parsing reflection metadata
   ///
 
-  void addReflectionInfo(ReflectionInfo I) {
+  /// Return a unique ID for the reflection image added. Since we only add
+  /// reflection infos, the ID can simply be its index.
+  llvm::Optional<uint64_t> addReflectionInfo(ReflectionInfo I) {
     ReflectionInfos.push_back(I);
+    return ReflectionInfos.size() - 1;
   }
-  
+
   const std::vector<ReflectionInfo> &getReflectionInfos() {
     return ReflectionInfos;
   }
@@ -939,9 +942,11 @@ private:
   llvm::Optional<std::string> normalizeReflectionName(RemoteRef<char> name);
   bool reflectionNameMatches(RemoteRef<char> reflectionName,
                              StringRef searchName);
-  void populateFieldTypeInfoCacheWithReflectionAtIndex(size_t Index);
+  void populateFieldTypeInfoCacheWithReflectionAtIndex(
+      size_t Index, remote::TypeInfoProvider *ExternalTypeInfo);
   llvm::Optional<RemoteRef<FieldDescriptor>>
-  findFieldDescriptorAtIndex(size_t Index, const std::string &MangledName);
+  findFieldDescriptorAtIndex(size_t Index, const std::string &MangledName,
+                             remote::TypeInfoProvider *ExternalTypeInfo);
 
 public:
   RemoteRef<char> readTypeRef(uint64_t remoteAddr);
@@ -1052,10 +1057,13 @@ public:
                     const std::string &Member,
                     StringRef Protocol);
 
-  const TypeRef *lookupSuperclass(const TypeRef *TR);
+  const TypeRef *lookupSuperclass(const TypeRef *TR,
+                                  remote::TypeInfoProvider *ExternalTypeInfo);
 
   /// Load unsubstituted field types for a nominal type.
-  RemoteRef<FieldDescriptor> getFieldTypeInfo(const TypeRef *TR);
+  RemoteRef<FieldDescriptor>
+  getFieldTypeInfo(const TypeRef *TR,
+                   remote::TypeInfoProvider *ExternalTypeInfo);
 
   /// Get the parsed and substituted field types for a nominal type.
   bool getFieldTypeRefs(const TypeRef *TR, RemoteRef<FieldDescriptor> FD,

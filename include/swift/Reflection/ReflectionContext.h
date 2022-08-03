@@ -772,7 +772,7 @@ public:
   /// \return
   ///     \b True if any of the reflection sections were registered,
   ///     \b false otherwise.
-  bool
+  llvm::Optional<uint64_t>
   addImage(llvm::function_ref<
                std::pair<RemoteRef<void>, uint64_t>(ReflectionSectionKind)>
                FindSection,
@@ -798,7 +798,7 @@ public:
 
     // If we didn't find any sections, return.
     if (llvm::all_of(Pairs, [](const auto &Pair) { return !Pair.first; }))
-      return false;
+      return {};
 
     ReflectionInfo Info = {{Pairs[0].first, Pairs[0].second},
                            {Pairs[1].first, Pairs[1].second},
@@ -809,12 +809,11 @@ public:
                            {Pairs[6].first, Pairs[6].second},
                            {Pairs[7].first, Pairs[7].second},
                            PotentialModuleNames};
-    this->addReflectionInfo(Info);
-    return true;
+    return addReflectionInfo(Info);
   }
 
-  void addReflectionInfo(ReflectionInfo I) {
-    getBuilder().addReflectionInfo(I);
+  llvm::Optional<uint64_t> addReflectionInfo(ReflectionInfo I) {
+    return getBuilder().addReflectionInfo(I);
   }
 
   bool ownsObject(RemoteAddress ObjectAddress) {
