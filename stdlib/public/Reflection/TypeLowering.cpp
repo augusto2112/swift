@@ -1201,7 +1201,7 @@ class ExistentialTypeInfoBuilder {
     return false;
   }
 
-  void examineProtocols() {
+  void examineProtocols(remote::TypeInfoProvider *ExternalTypeInfo) {
     if (isSingleError()) {
       Representation = ExistentialTypeRepresentation::Error;
       // No extra witness table for protocol<Error>
@@ -1223,7 +1223,7 @@ class ExistentialTypeInfoBuilder {
         continue;
       }
 
-      auto FD = TC.getBuilder().getFieldTypeInfo(P);
+      auto FD = TC.getBuilder().getFieldTypeInfo(P, ExternalTypeInfo);
       if (FD == nullptr) {
         DEBUG_LOG(fprintf(stderr, "No field descriptor: "); P->dump())
         Invalid = true;
@@ -1239,7 +1239,8 @@ class ExistentialTypeInfoBuilder {
           Representation = ExistentialTypeRepresentation::Class;
           ++WitnessTableCount;
 
-          if (auto *Superclass = TC.getBuilder().lookupSuperclass(P)) {
+          if (auto *Superclass =
+                  TC.getBuilder().lookupSuperclass(P, ExternalTypeInfo)) {
             // ObjC class info should be available in the metadata, so it's safe
             // to not pass an external provider here. This helps preserving the
             // layering.
@@ -1290,7 +1291,8 @@ public:
     Protocols.push_back(P);
   }
 
-  void addProtocolComposition(const ProtocolCompositionTypeRef *PC) {
+  void addProtocolComposition(const ProtocolCompositionTypeRef *PC,
+                              remote::TypeInfoProvider *ExternalTypeInfo) {
     for (auto *T : PC->getProtocols()) {
       addProtocol(T);
     }
@@ -1301,8 +1303,7 @@ public:
     if (auto *T = PC->getSuperclass()) {
       // Anything else should either be a superclass constraint, or
       // we have an invalid typeref.
-      if (!isa<NominalTypeRef>(T) &&
-          !isa<BoundGenericTypeRef>(T) &&
+      if (!isa<NominalTypeRef>(T) && !isa<BoundGenericTypeRef>(T) &&
           !isa<ObjCClassTypeRef>(T)) {
         DEBUG_LOG(fprintf(stderr, "Bad existential member: "); T->dump())
         Invalid = true;
@@ -1315,7 +1316,7 @@ public:
         return;
       }
 
-      const auto &FD = TC.getBuilder().getFieldTypeInfo(T);
+      const auto &FD = TC.getBuilder().getFieldTypeInfo(T, ExternalTypeInfo);
       if (FD == nullptr) {
         DEBUG_LOG(fprintf(stderr, "No field descriptor: "); T->dump())
         Invalid = true;
@@ -1350,7 +1351,7 @@ public:
   }
 
   const TypeInfo *build(remote::TypeInfoProvider *ExternalTypeInfo) {
-    examineProtocols();
+    examineProtocols(ExternalTypeInfo);
 
     if (Invalid)
       return nullptr;
@@ -1421,7 +1422,7 @@ public:
   }
 
   const TypeInfo *buildMetatype(remote::TypeInfoProvider *ExternalTypeInfo) {
-    examineProtocols();
+    examineProtocols(ExternalTypeInfo);
 
     if (Invalid)
       return nullptr;
@@ -2226,7 +2227,7 @@ public:
   }
 
   const TypeInfo *visitAnyNominalTypeRef(const TypeRef *TR) {
-    auto FD = TC.getBuilder().getFieldTypeInfo(TR);
+    auto FD = TC.getBuilder().getFieldTypeInfo(TR, ExternalTypeInfo);
     if (FD == nullptr || FD->isStruct()) {
       // Maybe this type is opaque -- look for a builtin
       // descriptor to see if we at least know its size
@@ -2325,7 +2326,7 @@ public:
   const TypeInfo *
   visitProtocolCompositionTypeRef(const ProtocolCompositionTypeRef *PC) {
     ExistentialTypeInfoBuilder builder(TC);
-    builder.addProtocolComposition(PC);
+    builder.addProtocolComposition(PC, ExternalTypeInfo);
     return builder.build(ExternalTypeInfo);
   }
 
@@ -2354,7 +2355,7 @@ public:
     auto *TR = EM->getInstanceType();
 
     if (auto *PC = dyn_cast<ProtocolCompositionTypeRef>(TR)) {
-      builder.addProtocolComposition(PC);
+      builder.addProtocolComposition(PC, ExternalTypeInfo);
     } else {
       DEBUG_LOG(fprintf(stderr, "Invalid existential metatype: "); EM->dump());
       return nullptr;
@@ -2515,7 +2516,7 @@ TypeConverter::getTypeInfo(const TypeRef *TR,
 const TypeInfo *TypeConverter::getClassInstanceTypeInfo(
     const TypeRef *TR, unsigned start,
     remote::TypeInfoProvider *ExternalTypeInfo) {
-  auto FD = getBuilder().getFieldTypeInfo(TR);
+  auto FD = getBuilder().getFieldTypeInfo(TR, ExternalTypeInfo);
   if (FD == nullptr) {
     DEBUG_LOG(fprintf(stderr, "No field descriptor: "); TR->dump());
     return nullptr;
