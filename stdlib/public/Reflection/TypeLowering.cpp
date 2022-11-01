@@ -241,25 +241,44 @@ BuiltinTypeInfo::BuiltinTypeInfo(TypeRefBuilder &builder,
               builder.readTypeRef(descriptor, descriptor->TypeName)))
 {}
 
-bool
-BuiltinTypeInfo::readExtraInhabitantIndex(remote::MemoryReader &reader,
-                                          remote::RemoteAddress address,
-                                          int *extraInhabitantIndex) const {
-    if (getNumExtraInhabitants() == 0) {
-      *extraInhabitantIndex = -1;
-      return true;
-    }
-    // If it has extra inhabitants, it must be a pointer.  (The only non-pointer
-    // data with extra inhabitants is a non-payload enum, which doesn't get here.)
-    if (Name == "yyXf") {
-      // But there are two different conventions, one for function pointers:
-      return reader.readFunctionPointerExtraInhabitantIndex(address, extraInhabitantIndex);
-    } else {
-      // And one for pointers to heap-allocated blocks of memory
-      return reader.readHeapObjectExtraInhabitantIndex(address, extraInhabitantIndex);
-    }
+bool BuiltinTypeInfo::readExtraInhabitantIndex(
+    remote::MemoryReader &reader, remote::RemoteAddress address,
+    int *extraInhabitantIndex) const {
+  if (getNumExtraInhabitants() == 0) {
+    *extraInhabitantIndex = -1;
+    return true;
   }
+  // If it has extra inhabitants, it could be an integer type with extra
+  // inhabitants (like a bool) or a pointer.
+  // Check if it's an integer first. The mangling of an integer type is
+  // type ::= 'Bi' NATURAL '_'
+  llvm::StringRef nameRef(Name);
+  if (nameRef.startswith("Bi") && nameRef.endswith("_")) {
+    assert(getSize() << 8 &&
+           "Integer with extra inhabitants has more than 8 bytes!");
+    uint64_t rawValue;
+    if (!reader.readInteger(address, getSize(), &rawValue))
+      return false;
 
+    uint64_t capacity = UINT8_MAX << (getSize() - 1);
+    uint64_t maxValidRawValue = capacity - getNumExtraInhabitants();
+    // If the raw value falls outside the range of valid values, this is an
+    // extra inhabitant.
+    if (maxValidRawValue < rawValue)
+      *extraInhabitantIndex = rawValue - maxValidRawValue;
+    else
+      *extraInhabitantIndex = -1;
+    return true;
+  } else if (Name == "yyXf") {
+    // But there are two different conventions, one for function pointers:
+    return reader.readFunctionPointerExtraInhabitantIndex(address,
+                                                          extraInhabitantIndex);
+  } else {
+    // And one for pointers to heap-allocated blocks of memory
+    return reader.readHeapObjectExtraInhabitantIndex(address,
+                                                     extraInhabitantIndex);
+  }
+}
 
 bool RecordTypeInfo::readExtraInhabitantIndex(remote::MemoryReader &reader,
                                               remote::RemoteAddress address,
@@ -510,7 +529,7 @@ public:
       // Discriminator is for a page that encodes payload (and maybe tag data too)
       int XITag;
       if (!PayloadCase.TI.readExtraInhabitantIndex(reader, address, &XITag)) {
-        return false;
+        return false;;
       }
       ComputedCase = XITag < 0 ? 0 : XITag + 1;
     } else {
