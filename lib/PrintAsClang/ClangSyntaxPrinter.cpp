@@ -422,5 +422,5 @@ void ClangSyntaxPrinter::printSymbolUSRAttribute(const ValueDecl *D) const {
                                   USRGenerationRequest{D}, std::string());
   if (result.empty())
     return;
-  os << " SWIFT_SYMBOL(\"" << result << "\")";
+  os << " SWIFT_SYMBOL(\"" << result << "\")";;
 }

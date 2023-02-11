@@ -11,13 +11,26 @@
 
 public final class ClassWithIntField {
   var field: Int64
+  var str = "Hello"
+  var myArray = ["Wow", "this", "is", "an", "array"]
 
   init() {
-    field = 0
+    field = 42
     print("init ClassWithIntField")
   }
   deinit {
     print("destroy ClassWithIntField")
+  }
+}
+
+public struct StructWithIntField {
+  var field: Int64
+  var str = "Hello this is a big string how are things"
+  var bla = "Yes this is a second string"
+
+  init() {
+    field = 0xdeadbeef
+    print("init ClassWithIntField")
   }
 }
 
@@ -104,6 +117,10 @@ public final class register { }
 
 public func returnClassWithIntField() -> ClassWithIntField {
   return ClassWithIntField()
+}
+
+public func returnStructWithIntField() -> StructWithIntField {
+  return StructWithIntField()
 }
 
 

@@ -19,6 +19,7 @@
 #include "swift/AST/Decl.h"
 #include "swift/AST/ParameterList.h"
 #include "swift/AST/Type.h"
+#include "swift/AST/TypeCheckRequests.h"
 #include "swift/AST/TypeVisitor.h"
 #include "swift/ClangImporter/ClangImporter.h"
 #include "swift/IRGen/IRABIDetailsProvider.h"
@@ -77,7 +78,10 @@ printCValueTypeStorageStruct(raw_ostream &os, const NominalTypeDecl *typeDecl,
   printCTypeName(os, typeDecl);
   os << " {\n";
   os << "  _Alignas(" << layout.alignment << ") ";
-  os << "char _storage[" << layout.size << "];\n";
+  swift::Mangle::ASTMangler mangler;
+  auto name = mangler.mangleDeclType(typeDecl);
+  os << "char $__storage[" << layout.size << "];\n";
+  os << "  static constexpr char " << name << " = 1;\n";
   os << "};\n\n";
 }
 
@@ -288,7 +292,7 @@ void ClangValueTypePrinter::printValueTypeDecl(
   ClangValueTypePrinter::printValueWitnessTableAccessAsVariable(
       os, typeMetadataFuncName, typeMetadataFuncGenericParams);
   if (isOpaqueLayout) {
-    os << "    _storage = ";
+    os << "    $__storage = ";
     printer.printSwiftImplQualifier();
     os << cxx_synthesis::getCxxOpaqueStorageClassName()
        << "(vwTable->size, vwTable->getAlignment());\n";
@@ -317,7 +321,7 @@ void ClangValueTypePrinter::printValueTypeDecl(
   if (isOpaqueLayout) {
     os << "(";
     printer.printSwiftImplQualifier();
-    os << "ValueWitnessTable * _Nonnull vwTable) : _storage(vwTable->size, "
+    os << "ValueWitnessTable * _Nonnull vwTable) : $__storage(vwTable->size, "
           "vwTable->getAlignment()) {}\n";
   } else {
     os << "() {}\n";
@@ -341,11 +345,11 @@ void ClangValueTypePrinter::printValueTypeDecl(
   }
   // Print out the private accessors to the underlying Swift value storage.
   os << "  inline const char * _Nonnull _getOpaquePointer() const { return "
-        "_storage";
+        "$__storage";
   if (isOpaqueLayout)
     os << ".getOpaquePointer()";
   os << "; }\n";
-  os << "  inline char * _Nonnull _getOpaquePointer() { return _storage";
+  os << "  inline char * _Nonnull _getOpaquePointer() { return $__storage";
   if (isOpaqueLayout)
     os << ".getOpaquePointer()";
   os << "; }\n";
@@ -373,11 +377,19 @@ void ClangValueTypePrinter::printValueTypeDecl(
   os << "  ";
   if (isOpaqueLayout) {
     printer.printSwiftImplQualifier();
-    os << cxx_synthesis::getCxxOpaqueStorageClassName() << " _storage;\n";
+    os << cxx_synthesis::getCxxOpaqueStorageClassName() << " $__storage;\n";
   } else {
     os << "alignas(" << typeSizeAlign->alignment << ") ";
-    os << "char _storage[" << typeSizeAlign->size << "];\n";
+    os << "char $__storage[" << typeSizeAlign->size << "];\n";
   }
+
+  auto result = evaluateOrDefault(typeDecl->getASTContext().evaluator,
+                                  USRGenerationRequest{typeDecl}, std::string());
+  llvm::errs() << result << "\n";
+  assert(!result.empty());
+  swift::Mangle::ASTMangler mangler;
+  auto name = mangler.mangleTypeForTypeName(typeDecl->getDeclaredType());
+  os << "  static constexpr char " << "s" << name << " = 1;\n";
   // Wrap up the value type.
   os << "  friend class " << cxx_synthesis::getCxxImplNamespaceName() << "::";
   printCxxImplClassName(os, typeDecl);

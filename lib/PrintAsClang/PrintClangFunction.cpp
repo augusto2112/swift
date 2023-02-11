@@ -335,7 +335,7 @@ public:
                                      Optional<OptionalTypeKind> optionalKind,
                                      bool isInOutParam,
                                      ArrayRef<Type> genericArgs = {}) {
-    assert(isa<StructDecl>(decl) || isa<EnumDecl>(decl));
+    assert(isa<StructDecl>(decl) || isa<EnumDecl>(decl));;
 
     // Handle known type names.
     if (printIfKnownSimpleType(decl, optionalKind, isInOutParam))

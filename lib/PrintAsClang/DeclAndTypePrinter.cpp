@@ -323,7 +323,7 @@ private:
       os << "SWIFT_CLASS";
     }
 
-    StringRef customName = getNameForObjC(CD, CustomNamesOnly);
+    StringRef customName = getNameForObjC(CD, CustomNamesOnly);;
     if (customName.empty()) {
       llvm::SmallString<32> scratch;
       os << "(\"" << CD->getObjCRuntimeName(scratch) << "\")";

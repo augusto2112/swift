@@ -1,9 +1,9 @@
 // RUN: %empty-directory(%t)
 
-// RUN: %target-swift-frontend %S/swift-class-in-cxx.swift -typecheck -module-name Class -clang-header-expose-decls=all-public -emit-clang-header-path %t/class.h
+// RUN: %target-swift-frontend %S/swift-class-in-cxx.swift -g -typecheck -module-name Class -clang-header-expose-decls=all-public -emit-clang-header-path %t/class.h
 
-// RUN: %target-interop-build-clangxx -c %s -I %t -o %t/swift-class-execution.o
-// RUN: %target-interop-build-swift %S/swift-class-in-cxx.swift -o %t/swift-class-execution -Xlinker %t/swift-class-execution.o -module-name Class -Xfrontend -entry-point-function-name -Xfrontend swiftMain
+// RUN: %target-interop-build-clangxx -c %s -I %t -g -o %t/swift-class-execution.o
+// RUN: %target-interop-build-swift %S/swift-class-in-cxx.swift -g -o %t/swift-class-execution -Xlinker %t/swift-class-execution.o -module-name Class -Xfrontend -entry-point-function-name -Xfrontend swiftMain
 
 // RUN: %target-codesign %t/swift-class-execution
 // RUN: %target-run %t/swift-class-execution | %FileCheck %s
@@ -37,6 +37,7 @@ int main() {
   // Ensure that the class is released.
   {
     auto x = returnClassWithIntField();
+    auto y = returnStructWithIntField();
     assert(getRetainCount(x) == 1);
   }
 // CHECK:      init ClassWithIntField
