@@ -13,6 +13,7 @@
 #include "PrintClangClassType.h"
 #include "ClangSyntaxPrinter.h"
 #include "PrintClangValueType.h"
+#include "swift/AST/ASTMangler.h"
 #include "swift/AST/Decl.h"
 #include "swift/IRGen/Linking.h"
 
@@ -77,6 +78,14 @@ void ClangClassTypePrinter::printClassTypeDecl(
   os << "  friend class " << cxx_synthesis::getCxxImplNamespaceName() << "::";
   printCxxImplClassName(os, typeDecl);
   os << ";\n";
+
+  // Print the swift mangled name as a dummy constexpr static char for the
+  // debugger.
+  swift::Mangle::ASTMangler mangler;
+  auto name = mangler.mangleTypeForDebugger(typeDecl->getDeclaredType(), nullptr);
+  if (!name.empty())
+    os << "  static constexpr char " << name << " = 0;\n";
+
   os << "};\n\n";
 
   // Print out the "hidden" _impl class.

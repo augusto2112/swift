@@ -383,6 +383,14 @@ void ClangValueTypePrinter::printValueTypeDecl(
   printCxxImplClassName(os, typeDecl);
   printGenericParamRefs(os);
   os << ";\n";
+
+  // Print the swift mangled name as a dummy constexpr static char for the
+  // debugger.
+  swift::Mangle::ASTMangler mangler;
+  auto name = mangler.mangleTypeForDebugger(typeDecl->getDeclaredType(), nullptr);
+  if (!name.empty())
+    os << "  static constexpr char " << name << " = 0;\n";
+
   os << "};\n";
   os << '\n';
 
