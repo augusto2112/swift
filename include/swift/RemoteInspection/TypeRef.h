@@ -211,7 +211,7 @@ public:
   Demangle::NodePointer getDemangling(Demangle::Demangler &Dem) const;
 
   /// Build the mangled name from this TypeRef.
-  llvm::Optional<std::string> mangle(Demangle::Demangler &Dem) const;
+  llvm::Optional<std::string> mangle() const;
 
   bool isConcrete() const;
   bool isConcreteAfterSubstitutions(const GenericArgumentMap &Subs) const;
