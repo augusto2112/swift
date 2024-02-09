@@ -15,6 +15,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "IRGenDebugInfo.h"
+#include "GenEnum.h"
 #include "GenOpaque.h"
 #include "GenStruct.h"
 #include "GenType.h"
@@ -1208,7 +1209,6 @@ private:
 
     auto TH = llvm::TrackingMDNodeRef(FwdDecl.get());
     DITypeCache[DbgTy.getType()] = TH;
-
     SmallVector<llvm::Metadata *, 16> Elements;
     for (auto *ElemDecl : Decl->getAllElements()) {
       llvm::Optional<CompletedDebugTypeInfo> ElemDbgTy;
@@ -1236,13 +1236,22 @@ private:
         Elements.push_back(MTy);
       }
     }
-    auto VPTy = DBuilder.createVariantPart(Scope, {}, File, Line, SizeInBits,
-                                           AlignInBits, Flags, nullptr,
-                                           DBuilder.getOrCreateArray(Elements));
+
+    auto VPTy = DBuilder.createVariantPart(
+        Scope, {}, File, Line, SizeInBits, AlignInBits, Flags, nullptr,
+        DBuilder.getOrCreateArray(Elements), /*UniqueIdentifier=*/"");
+
+    APInt SpareBitsMask;
+    auto &EnumStrategy =
+        getEnumImplStrategy(IGM, DbgTy.getType()->getCanonicalType());
+
+    if (auto SpareBitsMaskInfo = EnumStrategy.calculateSpareBitsMask())
+      SpareBitsMask = SpareBitsMaskInfo->bits;
+
     auto DITy = DBuilder.createStructType(
         Scope, Name, File, Line, SizeInBits, AlignInBits, Flags, nullptr,
         DBuilder.getOrCreateArray(VPTy), llvm::dwarf::DW_LANG_Swift, nullptr,
-        MangledName, NumExtraInhabitants ? *NumExtraInhabitants : 0);
+        MangledName, NumExtraInhabitants ? *NumExtraInhabitants : 0, SpareBitsMask);
     DBuilder.replaceTemporary(std::move(FwdDecl), DITy);
     return DITy;
   }
