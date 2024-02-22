@@ -1184,11 +1184,10 @@ private:
       return OpaqueType;
     }
 
-    auto *opaqueType = createOpaqueStructWithSizedContainer(
-        Scope, Decl ? Decl->getNameStr() : "", File, Line, SizeInBits,
-        AlignInBits, Flags, MangledName, collectGenericParams(Type),
-        UnsubstitutedType);
-    return opaqueType;
+    auto *OpaqueType =
+        createOpaqueStruct(Scope, Decl->getName().str(), File, Line, SizeInBits,
+                           AlignInBits, Flags, MangledName, UnsubstitutedType);
+    return OpaqueType;
   }
 
   /// Create debug information for an enum with a raw type (enum E : Int {}).
@@ -1624,12 +1623,13 @@ private:
   llvm::DICompositeType *
   createOpaqueStruct(llvm::DIScope *Scope, StringRef Name, llvm::DIFile *File,
                      unsigned Line, unsigned SizeInBits, unsigned AlignInBits,
-                     llvm::DINode::DIFlags Flags, StringRef MangledName) {
+                     llvm::DINode::DIFlags Flags, StringRef MangledName,
+                     llvm::DIType *SpecificationOf = nullptr) {
     return DBuilder.createStructType(
         Scope, Name, File, Line, SizeInBits, AlignInBits, Flags,
         /* DerivedFrom */ nullptr,
         DBuilder.getOrCreateArray(ArrayRef<llvm::Metadata *>()),
-        llvm::dwarf::DW_LANG_Swift, nullptr, MangledName);
+        llvm::dwarf::DW_LANG_Swift, nullptr, MangledName, SpecificationOf);
   }
 
   bool shouldCacheDIType(llvm::DIType *DITy, DebugTypeInfo &DbgTy) {
@@ -2006,17 +2006,15 @@ private:
             UnsubstitutedTy->mapTypeOutOfContext(), {});
         if (DeclTypeMangledName == MangledName) {
           return createUnsubstitutedVariantType(DbgTy, Decl, MangledName,
-                                   AlignInBits, Scope, File, FwdDeclLine,
-                                   Flags);
+                                                AlignInBits, Scope, L.File,
+                                                L.Line, Flags);
         }
         // Force the creation of the unsubstituted type, don't create it
         // directly so it goes through all the caching/verification logic.
         auto unsubstitutedDbgTy = getOrCreateType(DbgTy);
-        DBuilder.retainType(unsubstitutedDbgTy);
-        return createOpaqueStructWithSizedContainer(
-            Scope, Decl->getName().str(), L.File, FwdDeclLine, SizeInBits,
-            AlignInBits, Flags, MangledName, collectGenericParams(EnumTy),
-            unsubstitutedDbgTy);
+        return createOpaqueStruct(Scope, Decl->getName().str(), L.File,
+                                  FwdDeclLine, SizeInBits, AlignInBits, Flags,
+                                  MangledName, unsubstitutedDbgTy);
       }
       return createOpaqueStructWithSizedContainer(
           Scope, Decl->getName().str(), L.File, FwdDeclLine, SizeInBits,
