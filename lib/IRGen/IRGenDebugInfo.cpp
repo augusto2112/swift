@@ -1509,7 +1509,7 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
     SmallVector<llvm::Metadata *, 16> TemplateParams;
     for (auto Arg : GenericArgs) {
       DebugTypeInfo ParamDebugType;
-      if (Opts.DebugInfoLevel > IRGenDebugInfoLevel::ASTTypes)
+      if (Opts.DebugInfoLevel > IRGenDebugInfoLevel::ASTTypes || true)
         // For the DwarfTypes level don't generate just a forward declaration
         // for the generic type parameters.
         ParamDebugType = DebugTypeInfo::getFromTypeInfo(
@@ -1530,7 +1530,7 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
       llvm::DIScope *Scope, StringRef Name, llvm::DIFile *File, unsigned Line,
       unsigned SizeInBits, unsigned AlignInBits, llvm::DINode::DIFlags Flags,
       StringRef MangledName, llvm::DINodeArray BoundParams,
-      llvm::DIType *SpecificationOf = nullptr) {
+      llvm::DIType *SpecificationOf = nullptr, llvm::StringRef AlternativeModuleName = "") {
     // This uses a separate cache and not DIRefMap for the inner type to avoid
     // associating the anonymous container (which is specific to the
     // variable/storage and not the type) with the MangledName.
@@ -1541,7 +1541,7 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
     else {
       UniqueType = DBuilder.createForwardDecl(
           llvm::dwarf::DW_TAG_structure_type, MangledName, Scope, File, Line,
-          llvm::dwarf::DW_LANG_Swift, 0, 0);
+          llvm::dwarf::DW_LANG_Swift, 0, 0, MangledName, AlternativeModuleName);
       if (BoundParams)
         DBuilder.replaceArrays(UniqueType, nullptr, BoundParams);
       InnerTypeCache[UID] = llvm::TrackingMDNodeRef(UniqueType);
@@ -1552,7 +1552,7 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
     return DBuilder.createStructType(
         Scope, "", File, Line, SizeInBits, AlignInBits, Flags,
         /* DerivedFrom */ nullptr, DBuilder.getOrCreateArray(Elements),
-        llvm::dwarf::DW_LANG_Swift, nullptr, "", SpecificationOf, 0);
+        llvm::dwarf::DW_LANG_Swift, nullptr, "", SpecificationOf, 0, AlternativeModuleName);
   }
 
   llvm::DIType *
@@ -1712,13 +1712,13 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
                      unsigned Line, unsigned SizeInBits, unsigned AlignInBits,
                      llvm::DINode::DIFlags Flags, StringRef MangledName,
                      llvm::DINodeArray BoundParams = {},
-                     llvm::DIType *SpecificationOf = nullptr) {
+                     llvm::DIType *SpecificationOf = nullptr, StringRef AlternativeModuleName = "") {
 
     auto StructType = DBuilder.createStructType(
         Scope, Name, File, Line, SizeInBits, AlignInBits, Flags,
         /* DerivedFrom */ nullptr,
         DBuilder.getOrCreateArray(ArrayRef<llvm::Metadata *>()),
-        llvm::dwarf::DW_LANG_Swift, nullptr, MangledName, SpecificationOf);
+        llvm::dwarf::DW_LANG_Swift, nullptr, MangledName, SpecificationOf, 0, AlternativeModuleName);
 
     if (BoundParams)
       DBuilder.replaceArrays(StructType, nullptr, BoundParams);
@@ -1776,6 +1776,18 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
       return InternalType;
     }
 
+    llvm::DIType *SpecificationOf = nullptr;
+    llvm::StringRef AlternativeModuleName;
+     if (auto *TypeDecl = DbgTy.getType()->getNominalOrBoundGenericNominal())
+       // If this is a nominal type that has the @_originallyDefinedIn attribute,
+       // IRGenDebugInfo emits a forward declaration of the type as a child
+       // of the original module, and the type with a specification pointing to
+       // the forward declaraation. We do this so LLDB has enough information to
+       // both find the type in reflection metadata (the parent module name) and
+       // find it in the swiftmodule (the module name in the type mangled name).
+       if (auto Attribute =
+               TypeDecl->getAttrs().getAttribute<OriginallyDefinedInAttr>()) 
+        AlternativeModuleName = Attribute->OriginalModuleName;
     // Here goes!
     switch (BaseTy->getKind()) {
     case TypeKind::BuiltinUnboundGeneric:
@@ -1868,7 +1880,7 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
                                 SizeInBits, AlignInBits, Flags, nullptr,
                                 llvm::dwarf::DW_LANG_Swift, MangledName);
       }
-      StringRef Name = Decl->getName().str();
+      StringRef Name = Decl->getName().str();;
       if (!SizeInBitsOrNull)
         return DBuilder.createForwardDecl(
             llvm::dwarf::DW_TAG_structure_type, MangledName, Scope, L.File,
@@ -1878,7 +1890,7 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
             llvm::dwarf::DW_TAG_structure_type, MangledName, Scope, L.File,
             FwdDeclLine, llvm::dwarf::DW_LANG_Swift, 0, AlignInBits);
       return createOpaqueStruct(Scope, Name, L.File, FwdDeclLine, SizeInBits,
-                                AlignInBits, Flags, MangledName);
+                                AlignInBits, Flags, MangledName, {}, nullptr, AlternativeModuleName);
     }
 
     case TypeKind::Class: {
@@ -1965,7 +1977,7 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
       return createOpaqueStructWithSizedContainer(
           Scope, Decl ? Decl->getNameStr() : "", L.File, FwdDeclLine,
           SizeInBits, AlignInBits, Flags, MangledName,
-          collectGenericParams(StructTy));
+          collectGenericParams(StructTy), nullptr, AlternativeModuleName);
     }
 
     case TypeKind::BoundGenericClass: {
@@ -2126,7 +2138,7 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
       }
       return createOpaqueStructWithSizedContainer(
           Scope, Decl->getName().str(), L.File, FwdDeclLine, SizeInBits,
-          AlignInBits, Flags, MangledName, collectGenericParams(EnumTy));
+          AlignInBits, Flags, MangledName, collectGenericParams(EnumTy), nullptr, AlternativeModuleName);;
     }
 
     case TypeKind::BuiltinVector: {
@@ -2388,9 +2400,22 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
       // In LTO type uniquing is performed based on the UID. Forward
       // declarations may not have a unique ID to avoid a forward declaration
       // winning over a full definition.
+      //
+    llvm::StringRef AlternativeModuleName;
+     if (auto *TypeDecl = DbgTy.getType()->getNominalOrBoundGenericNominal())
+       // If this is a nominal type that has the @_originallyDefinedIn attribute,
+       // IRGenDebugInfo emits a forward declaration of the type as a child
+       // of the original module, and the type with a specification pointing to
+       // the forward declaraation. We do this so LLDB has enough information to
+       // both find the type in reflection metadata (the parent module name) and
+       // find it in the swiftmodule (the module name in the type mangled name).
+       if (auto Attribute =
+               TypeDecl->getAttrs().getAttribute<OriginallyDefinedInAttr>()) 
+        AlternativeModuleName = Attribute->OriginalModuleName;
+
       auto *FwdDecl = DBuilder.createReplaceableCompositeType(
           llvm::dwarf::DW_TAG_structure_type, MangledName, Scope, 0, 0,
-          llvm::dwarf::DW_LANG_Swift);
+          llvm::dwarf::DW_LANG_Swift, 0, 0, {}, {}, {}, AlternativeModuleName);
       FwdDeclTypes.emplace_back(
           std::piecewise_construct, std::make_tuple(MangledName),
           std::make_tuple(static_cast<llvm::Metadata *>(FwdDecl)));
