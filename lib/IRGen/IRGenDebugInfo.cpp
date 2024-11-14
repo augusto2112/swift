@@ -23,6 +23,7 @@
 #include "IRBuilder.h"
 #include "swift/AST/ASTDemangler.h"
 #include "swift/AST/ASTMangler.h"
+#include "swift/AST/Decl.h"
 #include "swift/AST/Expr.h"
 #include "swift/AST/GenericEnvironment.h"
 #include "swift/AST/IRGenOptions.h"
@@ -30,6 +31,7 @@
 #include "swift/AST/ModuleLoader.h"
 #include "swift/AST/Pattern.h"
 #include "swift/AST/TypeDifferenceVisitor.h"
+#include "swift/AST/Types.h"
 #include "swift/Basic/Assertions.h"
 #include "swift/Basic/Compiler.h"
 #include "swift/Basic/SourceManager.h"
@@ -61,6 +63,7 @@
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/IntrinsicInst.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileSystem.h"
@@ -150,6 +153,7 @@ class IRGenDebugInfoImpl : public IRGenDebugInfo {
   llvm::DenseMap<const void *, llvm::TrackingMDNodeRef> DIModuleCache;
   llvm::StringMap<llvm::TrackingMDNodeRef> DIFileCache;
   llvm::StringMap<llvm::TrackingMDNodeRef> RuntimeErrorFnCache;
+  llvm::StringSet<> OriginallyDefinedInTypes;
   TrackingDIRefMap DIRefMap;
   TrackingDIRefMap InnerTypeCache;
   /// \}
@@ -1777,26 +1781,6 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
     }
 
     llvm::DIType *SpecificationOf = nullptr;
-    if (auto *TypeDecl = DbgTy.getType()->getNominalOrBoundGenericNominal()) {
-      // If this is a nominal type that has the @_originallyDefinedIn attribute,
-      // IRGenDebugInfo emits a forward declaration of the type as a child
-      // of the original module, and the type with a specification pointing to
-      // the forward declaraation. We do this so LLDB has enough information to
-      // both find the type in reflection metadata (the parent module name) and
-      // find it in the swiftmodule (the module name in the type mangled name).
-      if (auto Attribute =
-              TypeDecl->getAttrs().getAttribute<OriginallyDefinedInAttr>()) {
-        auto Identifier = IGM.getSILModule().getASTContext().getIdentifier(
-            Attribute->OriginalModuleName);
-
-        void *Key = (void *)Identifier.get();
-        auto InnerScope =
-            getOrCreateModule(Key, TheCU, Attribute->OriginalModuleName, {});
-        SpecificationOf = DBuilder.createForwardDecl(
-            llvm::dwarf::DW_TAG_structure_type, TypeDecl->getNameStr(),
-            InnerScope, File, 0, llvm::dwarf::DW_LANG_Swift, 0, 0);
-      }
-    }
 
     // Here goes!
     switch (BaseTy->getKind()) {
@@ -2326,6 +2310,64 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
     }
   }
 
+  // If this is a nominal type that has the @_originallyDefinedIn
+  // attribute, IRGenDebugInfo emits a forward declaration of the type as
+  // a child of the original module, and the type with a specification
+  // pointing to the forward declaraation. We do this so LLDB has enough
+  // information to both find the type in reflection metadata (the parent
+  // module name) and find it in the swiftmodule (the module name in the
+  // type mangled name).
+  void handleOriginallyDefinedIn(DebugTypeInfo DbgTy, llvm::DIType *DITy,
+                                 StringRef MangledName, llvm::DIFile *File) {
+    if (OriginallyDefinedInTypes.contains(MangledName))
+      return;
+
+    auto Type = DbgTy.getType();
+    auto *TypeDecl = Type->getNominalOrBoundGenericNominal();
+
+    if (!TypeDecl)
+      return;
+
+    // Force over the generic type parameters, as those might be annotated
+    // with @_originallyDefinedIn.
+    if (auto *BoundDecl = llvm::dyn_cast<BoundGenericType>(DbgTy.getType()))
+      collectGenericParams(BoundDecl);
+
+    // Find the outmost type, since only those can have @_originallyDefinedIn
+    // adttached to them.
+    NominalTypeDecl *ParentDecl = TypeDecl;
+    while (llvm::isa_and_nonnull<NominalTypeDecl>(ParentDecl->getParent()))
+      ParentDecl = llvm::cast<NominalTypeDecl>(ParentDecl->getParent());
+
+    auto Attribute =
+        ParentDecl->getAttrs().getAttribute<OriginallyDefinedInAttr>();
+    if (!Attribute)
+      return;
+
+    auto Identifier = IGM.getSILModule().getASTContext().getIdentifier(
+        Attribute->OriginalModuleName);
+
+    void *Key = (void *)Identifier.get();
+    auto InnerScope =
+        getOrCreateModule(Key, TheCU, Attribute->OriginalModuleName, {});
+    // Create an artificial typedef whose name is prefixed "$ODI" (ODI stands
+    // for "Originally Defined In") followed by the type's mangled name, and
+    // whose type point to the originally defined in type.
+    std::string Name = ("$ODI" + MangledName).str();
+    auto TD = DBuilder.createTypedef(DITy, Name, File, 0, InnerScope);
+
+    // To make sure the typedef survives, create a globa variable expression
+    // using the typedef.
+    std::string VarName = Name + "$var";
+    // The global variable needs a constant expression so it survives.
+    auto Expr = DBuilder.createConstantValueExpression(0);
+    DBuilder.createGlobalVariableExpression(
+        InnerScope, VarName, /*LinkageName=*/{}, File, /*LineNo=*/0,
+        /*Ty=*/TD, /*IsLocalToUnit=*/true, /*isDefined=*/false, /*Expr=*/Expr);
+    // Only emit one typedef/global variable per type.
+    OriginallyDefinedInTypes.insert(MangledName);
+  }
+
   llvm::DIType *getOrCreateType(DebugTypeInfo DbgTy,
                                 llvm::DIScope *Scope = nullptr) {
     // Is this an empty type?
@@ -2419,6 +2461,8 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
       FwdDeclTypes.emplace_back(
           std::piecewise_construct, std::make_tuple(MangledName),
           std::make_tuple(static_cast<llvm::Metadata *>(FwdDecl)));
+
+      handleOriginallyDefinedIn(DbgTy, FwdDecl, MangledName, getFile(Scope));
       return FwdDecl;
     }
     llvm::DIType *DITy = createType(DbgTy, MangledName, Scope, getFile(Scope));
@@ -2447,6 +2491,7 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
     // Store it in the cache.
     DITypeCache.insert({DbgTy.getType(), llvm::TrackingMDNodeRef(DITy)});
 
+    handleOriginallyDefinedIn(DbgTy, DITy, MangledName, getFile(Scope));
     return DITy;
   }
 };
