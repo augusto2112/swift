@@ -964,7 +964,7 @@ private:
     return SizeInBits;
   }
 
-  StringRef getMangledName(DebugTypeInfo DbgTy) {
+  StringRef getMangledName(DebugTypeInfo DbgTy, bool RespectOriginallyDefinedIn = false) {
     if (DbgTy.isMetadataType())
       return MetadataTypeDeclCache.find(DbgTy.getDecl()->getName().str())
           ->getKey();
@@ -1016,11 +1016,12 @@ private:
         IGM.getSILModule());
 
     Mangle::ASTMangler Mangler;
-    std::string Result = Mangler.mangleTypeForDebugger(Ty, Sig);
+    std::string Result = Mangler.mangleTypeForDebugger(Ty, Sig, RespectOriginallyDefinedIn);
 
     // TODO(https://github.com/apple/swift/issues/57699): We currently cannot round trip some C++ types.
+    // There's no way to round trip when respecting @_originallyDefinedIn for a type.
     if (!Opts.DisableRoundTripDebugTypes &&
-        !Ty->getASTContext().LangOpts.EnableCXXInterop) {
+        !Ty->getASTContext().LangOpts.EnableCXXInterop && !RespectOriginallyDefinedIn) {
       // Make sure we can reconstruct mangled types for the debugger.
       auto &Ctx = Ty->getASTContext();
       Type Reconstructed = Demangle::getTypeForMangling(Ctx, Result, Sig);
@@ -2364,6 +2365,23 @@ createSpecializedStructOrClassType(NominalOrBoundGenericNominalType *Type,
     DBuilder.createGlobalVariableExpression(
         InnerScope, VarName, /*LinkageName=*/{}, File, /*LineNo=*/0,
         /*Ty=*/TD, /*IsLocalToUnit=*/true, /*isDefined=*/false, /*Expr=*/Expr);
+
+    {
+    Mangle::ASTMangler Mangler;
+    llvm::StringRef ABIMangledName =
+        getMangledName(DbgTy, /*RespectOriginallyDefinedIn=*/true);
+    std::string Name = "$ODI" + ABIMangledName.str();
+    auto TD = DBuilder.createTypedef(DITy, ABIMangledName, File, 0, InnerScope);
+
+    // To make sure the typedef survives, create a globa variable expression
+    // using the typedef.
+    std::string VarName = Name + "$var";
+    // The global variable needs a constant expression so it survives.
+    auto Expr = DBuilder.createConstantValueExpression(0);
+    DBuilder.createGlobalVariableExpression(
+        InnerScope, VarName, /*LinkageName=*/{}, File, /*LineNo=*/0,
+        /*Ty=*/TD, /*IsLocalToUnit=*/true, /*isDefined=*/false, /*Expr=*/Expr);
+    }
     // Only emit one typedef/global variable per type.
     OriginallyDefinedInTypes.insert(MangledName);
   }

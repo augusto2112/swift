@@ -708,12 +708,12 @@ static Type getTypeForDWARFMangling(Type t) {
     MakeAbstractConformanceForGenericType());
 }
 
-std::string ASTMangler::mangleTypeForDebugger(Type Ty, GenericSignature sig) {
+std::string ASTMangler::mangleTypeForDebugger(Type Ty, GenericSignature sig, bool RespectOriginallyDefinedIn) {
   PrettyStackTraceType prettyStackTrace(Ty->getASTContext(),
                                         "mangling type for debugger", Ty);
 
   DWARFMangling = true;
-  RespectOriginallyDefinedIn = false;
+  this->RespectOriginallyDefinedIn = RespectOriginallyDefinedIn;
   OptimizeProtocolNames = false;
   beginMangling();
 

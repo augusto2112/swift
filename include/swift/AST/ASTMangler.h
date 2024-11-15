@@ -348,7 +348,8 @@ public:
                                       GenericSignature signature,
                                       ResilienceExpansion expansion);
 
-  std::string mangleTypeForDebugger(Type decl, GenericSignature sig);
+  std::string mangleTypeForDebugger(Type decl, GenericSignature sig,
+                                    bool RespectOriginallyDefinedIn = false);
 
   /// Create a mangled name to be used for _typeName constant propagation.
   std::string mangleTypeForTypeName(Type type);
