@@ -21,6 +21,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #if SWIFT_ENABLE_REFLECTION
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
 #include "swift/ABI/Enum.h"
 #include "swift/ABI/MetadataValues.h"
@@ -246,6 +247,69 @@ public:
 void TypeInfo::dump(std::ostream &stream, unsigned Indent) const {
   PrintTypeInfo(stream, Indent).print(*this);
   stream << "\n";
+}
+
+TypeInfoComparison parseTypeInfoComparison(llvm::StringRef Str) {
+  Str = Str.trim();
+  if (Str.empty() || Str.equals_insensitive("off"))
+    return TypeInfoComparison::None;
+  if (Str.equals_insensitive("layout"))
+    return TypeInfoComparison::Layout;
+  if (Str.equals_insensitive("names"))
+    return TypeInfoComparison::Names;
+  if (Str.equals_insensitive("strict"))
+    return TypeInfoComparison::Strict;
+
+  unsigned Flags = 0;
+  llvm::SmallVector<llvm::StringRef, 16> Tokens;
+  Str.split(Tokens, ',', /*MaxSplit*/ -1, /*KeepEmpty*/ false);
+  for (llvm::StringRef Tok : Tokens) {
+    Tok = Tok.trim();
+    if (Tok.equals_insensitive("size"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::Size);
+    else if (Tok.equals_insensitive("alignment"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::Alignment);
+    else if (Tok.equals_insensitive("stride"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::Stride);
+    else if (Tok.equals_insensitive("extra-inhabitants"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::NumExtraInhabitants);
+    else if (Tok.equals_insensitive("borrowability"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::Borrowability);
+    else if (Tok.equals_insensitive("addressable"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::AddressableForDependencies);
+    else if (Tok.equals_insensitive("offsets"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::FieldOffsets);
+    else if (Tok.equals_insensitive("names"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::FieldNames);
+    else if (Tok.equals_insensitive("typerefs"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::FieldTypeRefs);
+    // Unrecognized tokens are ignored.
+  }
+  return static_cast<TypeInfoComparison>(Flags);
+}
+
+bool TypeInfo::Equals(const TypeInfo &Other, TypeInfoComparison Flags) const {
+  if (getKind() != Other.getKind())
+    return false;
+  if (contains(Flags, TypeInfoComparison::Size) &&
+      getSize() != Other.getSize())
+    return false;
+  if (contains(Flags, TypeInfoComparison::Alignment) &&
+      getAlignment() != Other.getAlignment())
+    return false;
+  if (contains(Flags, TypeInfoComparison::Stride) &&
+      getStride() != Other.getStride())
+    return false;
+  if (contains(Flags, TypeInfoComparison::NumExtraInhabitants) &&
+      getNumExtraInhabitants() != Other.getNumExtraInhabitants())
+    return false;
+  if (contains(Flags, TypeInfoComparison::Borrowability) &&
+      getBorrowability() != Other.getBorrowability())
+    return false;
+  if (contains(Flags, TypeInfoComparison::AddressableForDependencies) &&
+      isAddressableForDependencies() != Other.isAddressableForDependencies())
+    return false;
+  return true;
 }
 
 BitMask ReferenceTypeInfo::getSpareBits(TypeConverter &TC, bool &hasAddrOnly) const {
