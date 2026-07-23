@@ -2416,4 +2416,186 @@ bool TypeRef::deriveSubstitutions(GenericArgumentMap &Subs,
   return (OrigTR == SubstTR);
 }
 
+namespace {
+/// Compare two nullable child TypeRefs: both null is equal; one null is not.
+static bool equalOptionalTypeRef(const TypeRef *A, const TypeRef *B) {
+  if (!A)
+    return !B;
+  if (!B)
+    return false;
+  return A->Equals(B);
+}
+
+/// Compare two ordered lists of child TypeRefs elementwise.
+static bool equalTypeRefList(llvm::ArrayRef<const TypeRef *> A,
+                             llvm::ArrayRef<const TypeRef *> B) {
+  if (A.size() != B.size())
+    return false;
+  for (size_t i = 0, e = A.size(); i != e; ++i)
+    if (!equalOptionalTypeRef(A[i], B[i]))
+      return false;
+  return true;
+}
+
+/// Conservative fallback for kinds whose structure is complex/rare: compare
+/// canonical manglings. Complete for those kinds; both-fail is treated equal.
+static bool equalByMangling(const TypeRef *A, const TypeRef *B) {
+  Demangle::Demangler DA, DB;
+  auto MA = A->mangle(DA);
+  auto MB = B->mangle(DB);
+  if (!MA || !MB)
+    return !MA && !MB;
+  return *MA == *MB;
+}
+} // end anonymous namespace
+
+bool TypeRef::Equals(const TypeRef *Other) const {
+  if (this == Other)
+    return true;
+  if (!Other)
+    return false;
+  if (getKind() != Other->getKind())
+    return false;
+
+  switch (getKind()) {
+  case TypeRefKind::Builtin: {
+    auto *A = cast<BuiltinTypeRef>(this);
+    auto *B = cast<BuiltinTypeRef>(Other);
+    return A->getMangledName() == B->getMangledName();
+  }
+  case TypeRefKind::Nominal: {
+    auto *A = cast<NominalTypeRef>(this);
+    auto *B = cast<NominalTypeRef>(Other);
+    return A->getMangledName() == B->getMangledName() &&
+           equalOptionalTypeRef(A->getParent(), B->getParent());
+  }
+  case TypeRefKind::BoundGeneric: {
+    auto *A = cast<BoundGenericTypeRef>(this);
+    auto *B = cast<BoundGenericTypeRef>(Other);
+    return A->getMangledName() == B->getMangledName() &&
+           equalOptionalTypeRef(A->getParent(), B->getParent()) &&
+           equalTypeRefList(A->getGenericParams(), B->getGenericParams());
+  }
+  case TypeRefKind::Tuple: {
+    auto *A = cast<TupleTypeRef>(this);
+    auto *B = cast<TupleTypeRef>(Other);
+    return A->getLabels() == B->getLabels() &&
+           equalTypeRefList(A->getElements(), B->getElements());
+  }
+  case TypeRefKind::Pack: {
+    auto *A = cast<PackTypeRef>(this);
+    auto *B = cast<PackTypeRef>(Other);
+    return equalTypeRefList(A->getElements(), B->getElements());
+  }
+  case TypeRefKind::PackExpansion: {
+    auto *A = cast<PackExpansionTypeRef>(this);
+    auto *B = cast<PackExpansionTypeRef>(Other);
+    return equalOptionalTypeRef(A->getPattern(), B->getPattern()) &&
+           equalOptionalTypeRef(A->getCount(), B->getCount());
+  }
+  case TypeRefKind::Function: {
+    auto *A = cast<FunctionTypeRef>(this);
+    auto *B = cast<FunctionTypeRef>(Other);
+    if (A->getParameters().size() != B->getParameters().size())
+      return false;
+    for (size_t i = 0, e = A->getParameters().size(); i != e; ++i) {
+      const auto &pa = A->getParameters()[i];
+      const auto &pb = B->getParameters()[i];
+      if (pa.getLabel() != pb.getLabel())
+        return false;
+      if (pa.getFlags().getIntValue() != pb.getFlags().getIntValue())
+        return false;
+      if (!equalOptionalTypeRef(pa.getType(), pb.getType()))
+        return false;
+    }
+    return equalOptionalTypeRef(A->getResult(), B->getResult()) &&
+           A->getFlags().getIntValue() == B->getFlags().getIntValue() &&
+           A->getExtFlags().getIntValue() == B->getExtFlags().getIntValue() &&
+           A->getDifferentiabilityKind().getIntValue() ==
+               B->getDifferentiabilityKind().getIntValue() &&
+           equalOptionalTypeRef(A->getGlobalActor(), B->getGlobalActor()) &&
+           equalOptionalTypeRef(A->getThrownError(), B->getThrownError());
+  }
+  case TypeRefKind::ProtocolComposition: {
+    auto *A = cast<ProtocolCompositionTypeRef>(this);
+    auto *B = cast<ProtocolCompositionTypeRef>(Other);
+    return A->hasExplicitAnyObject() == B->hasExplicitAnyObject() &&
+           equalOptionalTypeRef(A->getSuperclass(), B->getSuperclass()) &&
+           equalTypeRefList(A->getProtocols(), B->getProtocols());
+  }
+  case TypeRefKind::Metatype: {
+    auto *A = cast<MetatypeTypeRef>(this);
+    auto *B = cast<MetatypeTypeRef>(Other);
+    return A->wasAbstract() == B->wasAbstract() &&
+           equalOptionalTypeRef(A->getInstanceType(), B->getInstanceType());
+  }
+  case TypeRefKind::ExistentialMetatype: {
+    auto *A = cast<ExistentialMetatypeTypeRef>(this);
+    auto *B = cast<ExistentialMetatypeTypeRef>(Other);
+    return equalOptionalTypeRef(A->getInstanceType(), B->getInstanceType());
+  }
+  case TypeRefKind::GenericTypeParameter: {
+    auto *A = cast<GenericTypeParameterTypeRef>(this);
+    auto *B = cast<GenericTypeParameterTypeRef>(Other);
+    return A->getDepth() == B->getDepth() && A->getIndex() == B->getIndex();
+  }
+  case TypeRefKind::DependentMember: {
+    auto *A = cast<DependentMemberTypeRef>(this);
+    auto *B = cast<DependentMemberTypeRef>(Other);
+    return A->getMember() == B->getMember() &&
+           A->getProtocol() == B->getProtocol() &&
+           equalOptionalTypeRef(A->getBase(), B->getBase());
+  }
+  case TypeRefKind::ForeignClass: {
+    return cast<ForeignClassTypeRef>(this)->getName() ==
+           cast<ForeignClassTypeRef>(Other)->getName();
+  }
+  case TypeRefKind::ObjCClass: {
+    return cast<ObjCClassTypeRef>(this)->getName() ==
+           cast<ObjCClassTypeRef>(Other)->getName();
+  }
+  case TypeRefKind::ObjCProtocol: {
+    return cast<ObjCProtocolTypeRef>(this)->getName() ==
+           cast<ObjCProtocolTypeRef>(Other)->getName();
+  }
+  case TypeRefKind::Opaque:
+    return true; // Singleton.
+  case TypeRefKind::Integer: {
+    return cast<IntegerTypeRef>(this)->getValue() ==
+           cast<IntegerTypeRef>(Other)->getValue();
+  }
+  case TypeRefKind::WeakStorage:
+  case TypeRefKind::UnownedStorage:
+  case TypeRefKind::UnmanagedStorage: {
+    // Kinds already match; static_cast to the shared base is safe and avoids
+    // relying on a base-class classof.
+    auto *A = static_cast<const ReferenceStorageTypeRef *>(this);
+    auto *B = static_cast<const ReferenceStorageTypeRef *>(Other);
+    return equalOptionalTypeRef(A->getType(), B->getType());
+  }
+  case TypeRefKind::SILBox: {
+    return equalOptionalTypeRef(cast<SILBoxTypeRef>(this)->getBoxedType(),
+                                cast<SILBoxTypeRef>(Other)->getBoxedType());
+  }
+  case TypeRefKind::BuiltinFixedArray: {
+    auto *A = cast<BuiltinFixedArrayTypeRef>(this);
+    auto *B = cast<BuiltinFixedArrayTypeRef>(Other);
+    return equalOptionalTypeRef(A->getSizeType(), B->getSizeType()) &&
+           equalOptionalTypeRef(A->getElementType(), B->getElementType());
+  }
+  case TypeRefKind::BuiltinBorrow: {
+    return equalOptionalTypeRef(cast<BuiltinBorrowTypeRef>(this)->getReferentType(),
+                                cast<BuiltinBorrowTypeRef>(Other)->getReferentType());
+  }
+  // Complex/rare kinds: canonical-mangling comparison is a complete structural
+  // check for these and avoids threading requirement/substitution lists here.
+  case TypeRefKind::ConstrainedExistential:
+  case TypeRefKind::SymbolicExtendedExistential:
+  case TypeRefKind::OpaqueArchetype:
+  case TypeRefKind::SILBoxTypeWithLayout:
+    return equalByMangling(this, Other);
+  }
+  return false;
+}
+
 #endif
