@@ -386,6 +386,15 @@ bool EnumTypeInfo::Equals(const TypeInfo &Other,
     return false;
   if (getEnumKind() != O->getEnumKind())
     return false;
+  // NOTE: The concrete multi-payload enum implementations
+  // (MultiPayloadEnumTypeInfo, TaggedMultiPayloadEnumTypeInfo) carry extra
+  // derived layout state (spareBitsMask, NumEffectivePayloadCases) that is NOT
+  // compared here, and both report EnumKind::MultiPayloadEnum, so this method
+  // cannot even distinguish the two. That state is a function of the Cases and
+  // base scalars already compared, so a genuine reflection-vs-DWARF divergence
+  // surfaces through those dimensions; comparing it directly (under Strict) is a
+  // possible future tightening. Until then, `Strict` is not exhaustive for
+  // multi-payload enums.
   return equalFieldInfos(getCases(), O->getCases(), Flags);
 }
 
