@@ -282,6 +282,8 @@ public:
     return Name;
   }
 
+  bool Equals(const TypeInfo &Other, TypeInfoComparison Flags) const override;
+
   bool readExtraInhabitantIndex(remote::MemoryReader &reader,
                                 remote::RemoteAddress address,
                                 int *extraInhabitantIndex) const override;
@@ -311,6 +313,8 @@ public:
   RecordKind getRecordKind() const { return SubKind; }
   unsigned getNumFields() const { return Fields.size(); }
   const std::vector<FieldInfo> &getFields() const { return Fields; }
+
+  bool Equals(const TypeInfo &Other, TypeInfoComparison Flags) const override;
 
   bool readExtraInhabitantIndex(remote::MemoryReader &reader,
                                 remote::RemoteAddress address,
@@ -385,6 +389,8 @@ public:
       && Cases[1].Name == "none";
   }
 
+  bool Equals(const TypeInfo &Other, TypeInfoComparison Flags) const override;
+
   virtual bool projectEnumValue(remote::MemoryReader &reader,
                                 remote::RemoteAddress address,
                                 int *CaseIndex) const = 0;
@@ -417,6 +423,8 @@ public:
   ReferenceCounting getReferenceCounting() const {
     return Refcounting;
   }
+
+  bool Equals(const TypeInfo &Other, TypeInfoComparison Flags) const override;
 
   bool readExtraInhabitantIndex(remote::MemoryReader &reader,
                                 remote::RemoteAddress address,
@@ -453,6 +461,7 @@ public:
   const TypeRef *getElementTypeRef() const { return ElementTR; }
   const TypeInfo *getElementTypeInfo() const { return ElementTI; }
   intptr_t getElementCount() const { return ElementCount; }
+  bool Equals(const TypeInfo &Other, TypeInfoComparison Flags) const override;
   static bool classof(const TypeInfo *TI) {
     return TI->getKind() == TypeInfoKind::Array;
   }
@@ -485,6 +494,7 @@ public:
 
   BitMask getSpareBits(TypeConverter &TC, bool &hasAddrOnly) const override;
   const TypeInfo *getReferentTypeInfo() const { return ReferentTI; }
+  bool Equals(const TypeInfo &Other, TypeInfoComparison Flags) const override;
   static bool classof(const TypeInfo *TI) {
     return TI->getKind() == TypeInfoKind::Borrow;
   }

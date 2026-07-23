@@ -117,3 +117,68 @@ TEST(TypeInfoEquals, BaseScalarsAreFlagGated) {
   TypeInfo a2(TypeInfoKind::Builtin, 8, 8, 8, 0, B::TakableAndBorrowable, false);
   EXPECT_TRUE(a.Equals(a2, TypeInfoComparison::Strict));
 }
+
+namespace {
+// EnumTypeInfo is abstract (projectEnumValue is pure virtual); a trivial
+// concrete subclass lets us exercise EnumTypeInfo::Equals directly.
+class TestEnumTypeInfo : public EnumTypeInfo {
+public:
+  TestEnumTypeInfo(unsigned Size, unsigned Align, unsigned Stride,
+                   unsigned NumXI, BitwiseBorrowability B, bool AFD,
+                   EnumKind K, const std::vector<FieldInfo> &Cases)
+      : EnumTypeInfo(Size, Align, Stride, NumXI, B, AFD, K, Cases) {}
+  bool projectEnumValue(remote::MemoryReader &, remote::RemoteAddress,
+                        int *) const override {
+    return false;
+  }
+};
+} // end anonymous namespace
+
+TEST(TypeInfoEquals, RecordFieldsRecurseAndGate) {
+  using B = BitwiseBorrowability;
+  BuiltinTypeInfo i8(8, 8, 8, 0, B::TakableAndBorrowable, false);
+  BuiltinTypeInfo i8b(8, 8, 8, 0, B::TakableAndBorrowable, false);
+
+  // Same shape, field names differ only.
+  std::vector<FieldInfo> fa{FieldInfo("x", /*Offset*/0, /*Value*/-1,
+                                      /*TR*/nullptr, i8)};
+  std::vector<FieldInfo> fb{FieldInfo("y", 0, -1, nullptr, i8b)};
+  RecordTypeInfo ra(16, 8, 16, 0, B::TakableAndBorrowable, false,
+                    RecordKind::Struct, fa);
+  RecordTypeInfo rb(16, 8, 16, 0, B::TakableAndBorrowable, false,
+                    RecordKind::Struct, fb);
+
+  EXPECT_TRUE(ra.Equals(rb, TypeInfoComparison::Layout));  // names not compared.
+  EXPECT_FALSE(ra.Equals(rb, TypeInfoComparison::Names));  // names now compared.
+
+  // Field count mismatch is always unequal (structural invariant).
+  std::vector<FieldInfo> fc{FieldInfo("x", 0, -1, nullptr, i8),
+                            FieldInfo("z", 8, -1, nullptr, i8)};
+  RecordTypeInfo rc(16, 8, 16, 0, B::TakableAndBorrowable, false,
+                    RecordKind::Struct, fc);
+  EXPECT_FALSE(ra.Equals(rc, TypeInfoComparison::None));
+
+  // Different record sub-kind is always unequal.
+  RecordTypeInfo rt(16, 8, 16, 0, B::TakableAndBorrowable, false,
+                    RecordKind::Tuple, fa);
+  EXPECT_FALSE(ra.Equals(rt, TypeInfoComparison::None));
+}
+
+TEST(TypeInfoEquals, EnumKindAndReference) {
+  using B = BitwiseBorrowability;
+  std::vector<FieldInfo> none;
+  TestEnumTypeInfo e1(1, 1, 1, 0, B::TakableAndBorrowable, false,
+                      EnumKind::NoPayloadEnum, none);
+  TestEnumTypeInfo e2(1, 1, 1, 0, B::TakableAndBorrowable, false,
+                      EnumKind::NoPayloadEnum, none);
+  TestEnumTypeInfo e3(1, 1, 1, 0, B::TakableAndBorrowable, false,
+                      EnumKind::SinglePayloadEnum, none);
+  EXPECT_TRUE(e1.Equals(e2, TypeInfoComparison::Strict));
+  EXPECT_FALSE(e1.Equals(e3, TypeInfoComparison::None)); // EnumKind always compared.
+
+  ReferenceTypeInfo r1(8, 8, 8, 1, B::TakableAndBorrowable,
+                       ReferenceKind::Strong, ReferenceCounting::Native);
+  ReferenceTypeInfo r2(8, 8, 8, 1, B::TakableAndBorrowable,
+                       ReferenceKind::Strong, ReferenceCounting::Unknown);
+  EXPECT_FALSE(r1.Equals(r2, TypeInfoComparison::None)); // refcounting always compared.
+}

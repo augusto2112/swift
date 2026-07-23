@@ -312,6 +312,134 @@ bool TypeInfo::Equals(const TypeInfo &Other, TypeInfoComparison Flags) const {
   return true;
 }
 
+namespace {
+/// Compare two nullable TypeRefs (used for field/case TypeRefs).
+static bool equalOptionalTR(const TypeRef *A, const TypeRef *B) {
+  if (!A)
+    return !B;
+  if (!B)
+    return false;
+  return A->Equals(B);
+}
+
+/// Compare two ordered FieldInfo lists. Count and per-field TypeInfo recursion
+/// are always compared; Offset/Value, Name, and TypeRefs are flag-gated.
+static bool equalFieldInfos(const std::vector<FieldInfo> &A,
+                            const std::vector<FieldInfo> &B,
+                            TypeInfoComparison Flags) {
+  if (A.size() != B.size())
+    return false;
+  for (size_t i = 0, e = A.size(); i != e; ++i) {
+    const FieldInfo &fa = A[i];
+    const FieldInfo &fb = B[i];
+    if (!fa.TI.Equals(fb.TI, Flags))
+      return false;
+    if (contains(Flags, TypeInfoComparison::FieldOffsets) &&
+        (fa.Offset != fb.Offset || fa.Value != fb.Value))
+      return false;
+    if (contains(Flags, TypeInfoComparison::FieldNames) && fa.Name != fb.Name)
+      return false;
+    if (contains(Flags, TypeInfoComparison::FieldTypeRefs)) {
+      if (!equalOptionalTR(fa.TR, fb.TR))
+        return false;
+      if (!equalOptionalTR(fa.IndirectPayloadTR, fb.IndirectPayloadTR))
+        return false;
+    }
+  }
+  return true;
+}
+} // end anonymous namespace
+
+bool BuiltinTypeInfo::Equals(const TypeInfo &Other,
+                             TypeInfoComparison Flags) const {
+  if (!TypeInfo::Equals(Other, Flags))
+    return false;
+  auto *O = llvm::dyn_cast<BuiltinTypeInfo>(&Other);
+  if (!O)
+    return false;
+  // The builtin's own identity (mangled name) is type-identity, gated with the
+  // strictest dimension.
+  if (contains(Flags, TypeInfoComparison::FieldTypeRefs) &&
+      getMangledTypeName() != O->getMangledTypeName())
+    return false;
+  return true;
+}
+
+bool RecordTypeInfo::Equals(const TypeInfo &Other,
+                            TypeInfoComparison Flags) const {
+  if (!TypeInfo::Equals(Other, Flags))
+    return false;
+  auto *O = llvm::dyn_cast<RecordTypeInfo>(&Other);
+  if (!O)
+    return false;
+  if (getRecordKind() != O->getRecordKind())
+    return false;
+  return equalFieldInfos(getFields(), O->getFields(), Flags);
+}
+
+bool EnumTypeInfo::Equals(const TypeInfo &Other,
+                          TypeInfoComparison Flags) const {
+  if (!TypeInfo::Equals(Other, Flags))
+    return false;
+  auto *O = llvm::dyn_cast<EnumTypeInfo>(&Other);
+  if (!O)
+    return false;
+  if (getEnumKind() != O->getEnumKind())
+    return false;
+  return equalFieldInfos(getCases(), O->getCases(), Flags);
+}
+
+bool ReferenceTypeInfo::Equals(const TypeInfo &Other,
+                               TypeInfoComparison Flags) const {
+  if (!TypeInfo::Equals(Other, Flags))
+    return false;
+  auto *O = llvm::dyn_cast<ReferenceTypeInfo>(&Other);
+  if (!O)
+    return false;
+  return getReferenceKind() == O->getReferenceKind() &&
+         getReferenceCounting() == O->getReferenceCounting();
+}
+
+bool ArrayTypeInfo::Equals(const TypeInfo &Other,
+                           TypeInfoComparison Flags) const {
+  if (!TypeInfo::Equals(Other, Flags))
+    return false;
+  auto *O = llvm::dyn_cast<ArrayTypeInfo>(&Other);
+  if (!O)
+    return false;
+  if (getElementCount() != O->getElementCount())
+    return false;
+  // Element TypeInfo is always recursed; the element TypeRef is gated.
+  const TypeInfo *ea = getElementTypeInfo();
+  const TypeInfo *eb = O->getElementTypeInfo();
+  if ((ea == nullptr) != (eb == nullptr))
+    return false;
+  if (ea && eb && !ea->Equals(*eb, Flags))
+    return false;
+  if (contains(Flags, TypeInfoComparison::FieldTypeRefs) &&
+      !equalOptionalTR(getElementTypeRef(), O->getElementTypeRef()))
+    return false;
+  return true;
+}
+
+bool BorrowTypeInfo::Equals(const TypeInfo &Other,
+                            TypeInfoComparison Flags) const {
+  if (!TypeInfo::Equals(Other, Flags))
+    return false;
+  auto *O = llvm::dyn_cast<BorrowTypeInfo>(&Other);
+  if (!O)
+    return false;
+  if (usesValueRepresentation() != O->usesValueRepresentation())
+    return false;
+  const TypeInfo *ra = getReferentTypeInfo();
+  const TypeInfo *rb = O->getReferentTypeInfo();
+  if ((ra == nullptr) != (rb == nullptr))
+    return false;
+  if (ra && rb && !ra->Equals(*rb, Flags))
+    return false;
+  return true;
+}
+
 BitMask ReferenceTypeInfo::getSpareBits(TypeConverter &TC, bool &hasAddrOnly) const {
   auto mpePointerSpareBits = TC.getBuilder().getMultiPayloadEnumPointerMask();
   return BitMask(getSize(), mpePointerSpareBits);
