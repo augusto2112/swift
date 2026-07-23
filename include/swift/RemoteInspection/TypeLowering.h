@@ -140,14 +140,6 @@ enum class TypeInfoComparison : unsigned {
            (1 << 6) | (1 << 7) | (1 << 8),
 };
 
-inline TypeInfoComparison operator|(TypeInfoComparison a, TypeInfoComparison b) {
-  return static_cast<TypeInfoComparison>(static_cast<unsigned>(a) |
-                                         static_cast<unsigned>(b));
-}
-inline TypeInfoComparison operator&(TypeInfoComparison a, TypeInfoComparison b) {
-  return static_cast<TypeInfoComparison>(static_cast<unsigned>(a) &
-                                         static_cast<unsigned>(b));
-}
 /// True iff every bit of `bit` is present in `set`.
 inline bool contains(TypeInfoComparison set, TypeInfoComparison bit) {
   return (static_cast<unsigned>(set) & static_cast<unsigned>(bit)) ==
