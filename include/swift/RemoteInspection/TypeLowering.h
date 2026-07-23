@@ -20,6 +20,7 @@
 
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
 #include "swift/Remote/MetadataReader.h"
 #include "swift/Remote/TypeInfoProvider.h"
@@ -111,6 +112,54 @@ enum class ReferenceKind : unsigned {
 #include "swift/AST/ReferenceStorage.def"
 };
 
+/// Selects which dimensions TypeInfo::Equals compares. `Kind`, record/enum
+/// sub-kind, field/case count, and the per-field recursion are always compared
+/// (structural invariants); everything below is opt-in so the differential run
+/// can tighten over time. Preset combinations are given as raw bit unions
+/// because scoped-enum enumerators are not implicitly convertible in the
+/// initializer list.
+enum class TypeInfoComparison : unsigned {
+  None                       = 0,
+  Size                       = 1 << 0,
+  Alignment                  = 1 << 1,
+  Stride                     = 1 << 2,
+  NumExtraInhabitants        = 1 << 3,
+  Borrowability              = 1 << 4,
+  AddressableForDependencies = 1 << 5,
+  FieldOffsets               = 1 << 6, // Per-field Offset + Value.
+  FieldNames                 = 1 << 7, // Record field + enum case names.
+  FieldTypeRefs              = 1 << 8, // Per-field/case TypeRef via TypeRef::Equals.
+
+  // Size | Alignment | Stride | FieldOffsets.
+  Layout = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 6),
+  // Layout | FieldNames.
+  Names  = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 6) | (1 << 7),
+  // Names | NumExtraInhabitants | Borrowability | AddressableForDependencies
+  //       | FieldTypeRefs.
+  Strict = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) |
+           (1 << 6) | (1 << 7) | (1 << 8),
+};
+
+inline TypeInfoComparison operator|(TypeInfoComparison a, TypeInfoComparison b) {
+  return static_cast<TypeInfoComparison>(static_cast<unsigned>(a) |
+                                         static_cast<unsigned>(b));
+}
+inline TypeInfoComparison operator&(TypeInfoComparison a, TypeInfoComparison b) {
+  return static_cast<TypeInfoComparison>(static_cast<unsigned>(a) &
+                                         static_cast<unsigned>(b));
+}
+/// True iff every bit of `bit` is present in `set`.
+inline bool contains(TypeInfoComparison set, TypeInfoComparison bit) {
+  return (static_cast<unsigned>(set) & static_cast<unsigned>(bit)) ==
+         static_cast<unsigned>(bit);
+}
+
+/// Parse a comparison level: a preset (off|layout|names|strict; empty == off)
+/// or a comma-separated dimension list (size, alignment, stride,
+/// extra-inhabitants, borrowability, addressable, offsets, names, typerefs).
+/// Unrecognized tokens are ignored.
+TypeInfoComparison parseTypeInfoComparison(llvm::StringRef Str);
+
 enum class TypeInfoKind : unsigned {
   Builtin,
   Record,
@@ -165,6 +214,11 @@ public:
 
   void dump() const;
   void dump(std::ostream &stream, unsigned Indent = 0) const;
+
+  /// Structural + configurable comparison of two independently-computed
+  /// TypeInfos. `Kind` is always compared; the rest is gated by `Flags`.
+  /// Virtual so comparison dispatches through the concrete subclass.
+  virtual bool Equals(const TypeInfo &Other, TypeInfoComparison Flags) const;
 
   // Using the provided reader, inspect our value.
   // Return false if we can't inspect value.
