@@ -253,6 +253,11 @@ public:
 
   std::optional<GenericArgumentMap> getSubstMap() const;
 
+  /// Recursive structural equality across TypeRefBuilders. Two TypeRefs from
+  /// different builders cannot be pointer- or Profile-compared, so this walks
+  /// the structure. All-or-nothing (no configurability).
+  bool Equals(const TypeRef *Other) const;
+
   virtual ~TypeRef() = default;
 
   /// Given an original type and substituted type, decompose them in
