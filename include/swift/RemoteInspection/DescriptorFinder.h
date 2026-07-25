@@ -36,6 +36,15 @@ enum class BitwiseBorrowability : unsigned {
 };
 
 /// An abstract interface for a builtin type descriptor.
+///
+/// A descriptor source may know some layout scalars but not others. An
+/// `Alignment` of 0 means "this source does not know the alignment"; consumers
+/// must then derive it themselves (for a multi-payload enum, for instance, the
+/// alignment is the maximum of the payload alignments). A descriptor read from
+/// reflection metadata always knows the alignment, but one reconstructed from
+/// DWARF may not, because the compiler omits `DW_AT_alignment` for a type with
+/// its default alignment. `Stride` is likewise unknown (0) whenever the
+/// alignment is, since it is derived from it.
 struct BuiltinTypeDescriptorBase {
   const uint32_t Size;
   const uint32_t Alignment;
@@ -52,6 +61,10 @@ struct BuiltinTypeDescriptorBase {
         NumExtraInhabitants(NumExtraInhabitants),
         Borrowability(Borrowability),
         AddressableForDependencies(AFD) {}
+
+  /// Whether this descriptor knows the type's alignment; see the note on
+  /// \c Alignment.
+  bool hasKnownAlignment() const { return Alignment != 0; }
 
   virtual ~BuiltinTypeDescriptorBase(){};
 
