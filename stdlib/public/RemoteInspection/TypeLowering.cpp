@@ -21,6 +21,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #if SWIFT_ENABLE_REFLECTION
 
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/MathExtras.h"
 #include "swift/ABI/Enum.h"
 #include "swift/ABI/MetadataValues.h"
@@ -246,6 +247,206 @@ public:
 void TypeInfo::dump(std::ostream &stream, unsigned Indent) const {
   PrintTypeInfo(stream, Indent).print(*this);
   stream << "\n";
+}
+
+TypeInfoComparison parseTypeInfoComparison(llvm::StringRef Str) {
+  Str = Str.trim();
+  if (Str.empty() || Str.equals_insensitive("off"))
+    return TypeInfoComparison::None;
+  if (Str.equals_insensitive("layout"))
+    return TypeInfoComparison::Layout;
+  if (Str.equals_insensitive("names"))
+    return TypeInfoComparison::Names;
+  if (Str.equals_insensitive("strict"))
+    return TypeInfoComparison::Strict;
+
+  unsigned Flags = 0;
+  llvm::SmallVector<llvm::StringRef, 16> Tokens;
+  Str.split(Tokens, ',', /*MaxSplit*/ -1, /*KeepEmpty*/ false);
+  for (llvm::StringRef Tok : Tokens) {
+    Tok = Tok.trim();
+    if (Tok.equals_insensitive("size"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::Size);
+    else if (Tok.equals_insensitive("alignment"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::Alignment);
+    else if (Tok.equals_insensitive("stride"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::Stride);
+    else if (Tok.equals_insensitive("extra-inhabitants"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::NumExtraInhabitants);
+    else if (Tok.equals_insensitive("borrowability"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::Borrowability);
+    else if (Tok.equals_insensitive("addressable"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::AddressableForDependencies);
+    else if (Tok.equals_insensitive("offsets"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::FieldOffsets);
+    else if (Tok.equals_insensitive("names"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::FieldNames);
+    else if (Tok.equals_insensitive("typerefs"))
+      Flags |= static_cast<unsigned>(TypeInfoComparison::FieldTypeRefs);
+    // Unrecognized tokens are ignored.
+  }
+  return static_cast<TypeInfoComparison>(Flags);
+}
+
+bool TypeInfo::Equals(const TypeInfo &Other, TypeInfoComparison Flags) const {
+  if (getKind() != Other.getKind())
+    return false;
+  if (contains(Flags, TypeInfoComparison::Size) &&
+      getSize() != Other.getSize())
+    return false;
+  if (contains(Flags, TypeInfoComparison::Alignment) &&
+      getAlignment() != Other.getAlignment())
+    return false;
+  if (contains(Flags, TypeInfoComparison::Stride) &&
+      getStride() != Other.getStride())
+    return false;
+  if (contains(Flags, TypeInfoComparison::NumExtraInhabitants) &&
+      getNumExtraInhabitants() != Other.getNumExtraInhabitants())
+    return false;
+  if (contains(Flags, TypeInfoComparison::Borrowability) &&
+      getBorrowability() != Other.getBorrowability())
+    return false;
+  if (contains(Flags, TypeInfoComparison::AddressableForDependencies) &&
+      isAddressableForDependencies() != Other.isAddressableForDependencies())
+    return false;
+  return true;
+}
+
+namespace {
+/// Compare two nullable TypeRefs (used for field/case TypeRefs).
+static bool equalOptionalTR(const TypeRef *A, const TypeRef *B) {
+  if (!A)
+    return !B;
+  if (!B)
+    return false;
+  return A->Equals(B);
+}
+
+/// Compare two ordered FieldInfo lists. Count and per-field TypeInfo recursion
+/// are always compared; Offset/Value, Name, and TypeRefs are flag-gated.
+static bool equalFieldInfos(const std::vector<FieldInfo> &A,
+                            const std::vector<FieldInfo> &B,
+                            TypeInfoComparison Flags) {
+  if (A.size() != B.size())
+    return false;
+  for (size_t i = 0, e = A.size(); i != e; ++i) {
+    const FieldInfo &fa = A[i];
+    const FieldInfo &fb = B[i];
+    if (!fa.TI.Equals(fb.TI, Flags))
+      return false;
+    if (contains(Flags, TypeInfoComparison::FieldOffsets) &&
+        (fa.Offset != fb.Offset || fa.Value != fb.Value))
+      return false;
+    if (contains(Flags, TypeInfoComparison::FieldNames) && fa.Name != fb.Name)
+      return false;
+    if (contains(Flags, TypeInfoComparison::FieldTypeRefs)) {
+      if (!equalOptionalTR(fa.TR, fb.TR))
+        return false;
+      if (!equalOptionalTR(fa.IndirectPayloadTR, fb.IndirectPayloadTR))
+        return false;
+    }
+  }
+  return true;
+}
+} // end anonymous namespace
+
+bool BuiltinTypeInfo::Equals(const TypeInfo &Other,
+                             TypeInfoComparison Flags) const {
+  if (!TypeInfo::Equals(Other, Flags))
+    return false;
+  auto *O = llvm::dyn_cast<BuiltinTypeInfo>(&Other);
+  if (!O)
+    return false;
+  // The builtin's own identity (mangled name) is type-identity, gated with the
+  // strictest dimension.
+  if (contains(Flags, TypeInfoComparison::FieldTypeRefs) &&
+      getMangledTypeName() != O->getMangledTypeName())
+    return false;
+  return true;
+}
+
+bool RecordTypeInfo::Equals(const TypeInfo &Other,
+                            TypeInfoComparison Flags) const {
+  if (!TypeInfo::Equals(Other, Flags))
+    return false;
+  auto *O = llvm::dyn_cast<RecordTypeInfo>(&Other);
+  if (!O)
+    return false;
+  if (getRecordKind() != O->getRecordKind())
+    return false;
+  return equalFieldInfos(getFields(), O->getFields(), Flags);
+}
+
+bool EnumTypeInfo::Equals(const TypeInfo &Other,
+                          TypeInfoComparison Flags) const {
+  if (!TypeInfo::Equals(Other, Flags))
+    return false;
+  auto *O = llvm::dyn_cast<EnumTypeInfo>(&Other);
+  if (!O)
+    return false;
+  if (getEnumKind() != O->getEnumKind())
+    return false;
+  // NOTE: The concrete multi-payload enum implementations
+  // (MultiPayloadEnumTypeInfo, TaggedMultiPayloadEnumTypeInfo) carry extra
+  // derived layout state (spareBitsMask, NumEffectivePayloadCases) that is NOT
+  // compared here, and both report EnumKind::MultiPayloadEnum, so this method
+  // cannot even distinguish the two. That state is a function of the Cases and
+  // base scalars already compared, so a genuine reflection-vs-DWARF divergence
+  // surfaces through those dimensions; comparing it directly (under Strict) is a
+  // possible future tightening. Until then, `Strict` is not exhaustive for
+  // multi-payload enums.
+  return equalFieldInfos(getCases(), O->getCases(), Flags);
+}
+
+bool ReferenceTypeInfo::Equals(const TypeInfo &Other,
+                               TypeInfoComparison Flags) const {
+  if (!TypeInfo::Equals(Other, Flags))
+    return false;
+  auto *O = llvm::dyn_cast<ReferenceTypeInfo>(&Other);
+  if (!O)
+    return false;
+  return getReferenceKind() == O->getReferenceKind() &&
+         getReferenceCounting() == O->getReferenceCounting();
+}
+
+bool ArrayTypeInfo::Equals(const TypeInfo &Other,
+                           TypeInfoComparison Flags) const {
+  if (!TypeInfo::Equals(Other, Flags))
+    return false;
+  auto *O = llvm::dyn_cast<ArrayTypeInfo>(&Other);
+  if (!O)
+    return false;
+  if (getElementCount() != O->getElementCount())
+    return false;
+  // Element TypeInfo is always recursed; the element TypeRef is gated.
+  const TypeInfo *ea = getElementTypeInfo();
+  const TypeInfo *eb = O->getElementTypeInfo();
+  if ((ea == nullptr) != (eb == nullptr))
+    return false;
+  if (ea && eb && !ea->Equals(*eb, Flags))
+    return false;
+  if (contains(Flags, TypeInfoComparison::FieldTypeRefs) &&
+      !equalOptionalTR(getElementTypeRef(), O->getElementTypeRef()))
+    return false;
+  return true;
+}
+
+bool BorrowTypeInfo::Equals(const TypeInfo &Other,
+                            TypeInfoComparison Flags) const {
+  if (!TypeInfo::Equals(Other, Flags))
+    return false;
+  auto *O = llvm::dyn_cast<BorrowTypeInfo>(&Other);
+  if (!O)
+    return false;
+  if (usesValueRepresentation() != O->usesValueRepresentation())
+    return false;
+  const TypeInfo *ra = getReferentTypeInfo();
+  const TypeInfo *rb = O->getReferentTypeInfo();
+  if ((ra == nullptr) != (rb == nullptr))
+    return false;
+  if (ra && rb && !ra->Equals(*rb, Flags))
+    return false;
+  return true;
 }
 
 BitMask ReferenceTypeInfo::getSpareBits(TypeConverter &TC, bool &hasAddrOnly) const {
